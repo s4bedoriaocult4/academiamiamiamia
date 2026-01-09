@@ -96,28 +96,22 @@ export function StudentViewModal({ isOpen, onClose, student }: StudentViewModalP
                             </div>
                         </div>
 
-                        {/* Endereço */}
-                        {(student.cep || student.address) && (
-                            <div className="card">
-                                <h4 className="text-lg font-semibold mb-4 flex items-center gap-2">
-                                    <MapPin size={20} /> Endereço
-                                </h4>
-                                <div className="space-y-2">
-                                    {student.cep && (
-                                        <div>
-                                            <label className="text-sm font-medium text-gray-600 dark:text-gray-400">CEP</label>
-                                            <p className="text-base">{student.cep}</p>
-                                        </div>
-                                    )}
-                                    {student.address && (
-                                        <div>
-                                            <label className="text-sm font-medium text-gray-600 dark:text-gray-400">Endereço</label>
-                                            <p className="text-base">{student.address}</p>
-                                        </div>
-                                    )}
+                        {/* Endereço - Sempre mostrar */}
+                        <div className="card">
+                            <h4 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                                <MapPin size={20} /> Endereço
+                            </h4>
+                            <div className="space-y-2">
+                                <div>
+                                    <label className="text-sm font-medium text-gray-600 dark:text-gray-400">CEP</label>
+                                    <p className="text-base">{student.cep || 'Não informado'}</p>
+                                </div>
+                                <div>
+                                    <label className="text-sm font-medium text-gray-600 dark:text-gray-400">Endereço</label>
+                                    <p className="text-base">{student.address || 'Não informado'}</p>
                                 </div>
                             </div>
-                        )}
+                        </div>
 
                         {/* Informações da Academia */}
                         <div className="card">

@@ -124,6 +124,43 @@ export function Dashboard() {
                 </button>
             </div>
 
+            {/* Aniversariantes do Mês - Movido para o topo */}
+            {birthdayStudents.length > 0 && (
+                <div className={`alert ${todayBirthdays.length > 0 ? 'alert-warning' : 'alert-info'} mb-6`}>
+                    <Cake size={20} />
+                    <div className="alert-content">
+                        <p className="alert-title">
+                            🎂 Aniversariantes do Mês {todayBirthdays.length > 0 && ' - Hoje é aniversário!'}
+                        </p>
+                        <div className="mt-2 space-y-2">
+                            {birthdayStudents.map(s => {
+                                if (!s.birthDate) return null;
+                                const birth = new Date(s.birthDate);
+                                const isToday = birth.getMonth() === currentMonth && birth.getDate() === today.getDate();
+                                const day = birth.getDate();
+                                return (
+                                    <div 
+                                        key={s.id} 
+                                        className={`flex justify-between text-sm py-1 border-b ${isToday ? 'border-yellow-300 font-bold text-yellow-800' : 'border-blue-200'} last:border-0`}
+                                        style={{ 
+                                            display: 'flex', 
+                                            justifyContent: 'space-between', 
+                                            padding: '0.5rem 0',
+                                            fontWeight: isToday ? 'bold' : 'normal'
+                                        }}
+                                    >
+                                        <span>{s.name} {isToday && '🎉'}</span>
+                                        <span className="font-bold">
+                                            Dia {day}
+                                        </span>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* Stats Grid */}
             <div className="stats-grid">
                 <div className="stat-card">
@@ -248,43 +285,6 @@ export function Dashboard() {
                     </ResponsiveContainer>
                 </div>
             </div>
-
-            {/* Aniversariantes do Mês */}
-            {birthdayStudents.length > 0 && (
-                <div className={`alert ${todayBirthdays.length > 0 ? 'alert-warning' : 'alert-info'}`}>
-                    <Cake size={20} />
-                    <div className="alert-content">
-                        <p className="alert-title">
-                            🎂 Aniversariantes do Mês {todayBirthdays.length > 0 && ' - Hoje é aniversário!'}
-                        </p>
-                        <div className="mt-2 space-y-2">
-                            {birthdayStudents.map(s => {
-                                if (!s.birthDate) return null;
-                                const birth = new Date(s.birthDate);
-                                const isToday = birth.getMonth() === currentMonth && birth.getDate() === today.getDate();
-                                const day = birth.getDate();
-                                return (
-                                    <div 
-                                        key={s.id} 
-                                        className={`flex justify-between text-sm py-1 border-b ${isToday ? 'border-yellow-300 font-bold text-yellow-800' : 'border-blue-200'} last:border-0`}
-                                        style={{ 
-                                            display: 'flex', 
-                                            justifyContent: 'space-between', 
-                                            padding: '0.5rem 0',
-                                            fontWeight: isToday ? 'bold' : 'normal'
-                                        }}
-                                    >
-                                        <span>{s.name} {isToday && '🎉'}</span>
-                                        <span className="font-bold">
-                                            Dia {day}
-                                        </span>
-                                    </div>
-                                );
-                            })}
-                        </div>
-                    </div>
-                </div>
-            )}
 
             {/* Alerts */}
             {overdueStudents.length > 0 && (

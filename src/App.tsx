@@ -39,20 +39,15 @@ function App() {
         if (isDbReady) loadTheme();
     }, [isDbReady]);
 
-    // Verificar autenticação
+    // Verificar autenticação - sempre mostrar screenlock
     useEffect(() => {
-        const checkAuth = async () => {
-            if (!isDbReady) return;
-            
-            const savedPassword = await db.settings.get('appPassword');
-            const remembered = sessionStorage.getItem('gym_remembered');
-            
-            // Se não há senha configurada ou está lembrado, permitir acesso
-            if (!savedPassword?.value || remembered === 'true') {
-                setIsAuthenticated(true);
-            }
-        };
-        checkAuth();
+        if (!isDbReady) return;
+
+        const remembered = sessionStorage.getItem('gym_remembered');
+        // Só permitir acesso se estiver lembrado na sessão
+        if (remembered === 'true') {
+            setIsAuthenticated(true);
+        }
     }, [isDbReady]);
 
     const handleLogin = () => {
@@ -79,7 +74,7 @@ function App() {
         );
     }
 
-    // Mostrar tela de login se não autenticado
+    // Se não autenticado, mostrar screenlock
     if (!isAuthenticated) {
         return <LoginPage onLogin={handleLogin} />;
     }
@@ -115,7 +110,7 @@ function App() {
                 <div className="sidebar-header">
                     <div className="logo-container">
                         <span className="logo-icon">🥊</span>
-                        <h1 className="logo-text">Muay Thai Manager</h1>
+                        <h1 className="logo-text">RESISTÊNCIA MUAY THAI</h1>
                     </div>
                     <button
                         className="md:hidden"
@@ -139,8 +134,12 @@ function App() {
                         {darkMode ? <Sun size={20} /> : <Moon size={20} />}
                         <span>{darkMode ? 'Modo Claro' : 'Modo Escuro'}</span>
                     </button>
-                    <div className="text-xs text-center mt-4 text-gray-400">
-                        v2.0 (IndexedDB)
+                    <div className="sidebar-credits">
+                        <div className="credits-version">v5 (IndexedDB)</div>
+                        <div className="credits-about">
+                            <span className="credits-made">Feito por <strong>MTZ</strong>, <strong>Antigravity</strong> e <strong>Cursor</strong></span>
+                            <span className="credits-quote">"De trabalhadores, para trabalhadores."</span>
+                        </div>
                     </div>
                 </div>
             </aside>
@@ -150,7 +149,7 @@ function App() {
                 <button onClick={() => setIsMobileMenuOpen(true)}>
                     <Menu size={24} />
                 </button>
-                <h1 className="text-lg font-bold">Muay Thai Manager</h1>
+                <h1 className="text-lg font-bold">RESISTÊNCIA MUAY THAI</h1>
                 <div className="w-6"></div> {/* Spacer */}
             </header>
 
