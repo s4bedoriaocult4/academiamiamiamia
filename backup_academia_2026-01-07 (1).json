@@ -1,0 +1,54 @@
+{
+  "students": [
+    {
+      "id": "1767801827755",
+      "name": "25512",
+      "phone": "2558252525",
+      "email": "512525",
+      "plan": "1x",
+      "dueDay": 5,
+      "startDate": "2025-08-07",
+      "nextDue": "2026-03-05",
+      "graduation": "Vermelha",
+      "status": "ativo",
+      "notes": "cara legal",
+      "createdAt": "2026-01-07T16:03:47.755Z"
+    }
+  ],
+  "payments": [
+    {
+      "id": "1767801873595",
+      "studentId": "1767801827755",
+      "studentName": "25512",
+      "amount": 115,
+      "method": "Cartão Crédito",
+      "date": "2026-01-07",
+      "referenceMonth": "2026-01",
+      "createdAt": "2026-01-07T16:04:33.595Z"
+    }
+  ],
+  "attendance": [
+    {
+      "id": "1767801890795",
+      "studentId": "1767801827755",
+      "studentName": "25512",
+      "date": "2026-01-07",
+      "createdAt": "2026-01-07T16:04:50.795Z"
+    }
+  ],
+  "expenses": [
+    {
+      "id": "1767801915779",
+      "description": "lugel",
+      "category": "Outros",
+      "amount": 2000,
+      "date": "2026-01-07",
+      "recurring": true,
+      "createdAt": "2026-01-07T16:05:15.779Z"
+    }
+  ],
+  "dailyNotes": [],
+  "darkMode": true,
+  "version": 1,
+  "lastModified": "2026-01-07T16:02:04.803Z"
+}
