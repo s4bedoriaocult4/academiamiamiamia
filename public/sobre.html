@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RESISTÊNCIA MUAY THAI - Sobre o Sistema</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: linear-gradient(135deg, #0f172a 0%, #1e3a5f 50%, #1e40af 100%);
+            min-height: 100vh;
+            color: #f8fafc;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 2rem 1rem;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 3rem;
+            padding: 2rem;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 20px;
+            backdrop-filter: blur(10px);
+        }
+
+        .logo {
+            font-size: 4rem;
+            margin-bottom: 1rem;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            font-weight: 800;
+            background: linear-gradient(135deg, #60a5fa, #a78bfa);
+            background-clip: text;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 0.5rem;
+        }
+
+        .subtitle {
+            color: #94a3b8;
+            font-size: 1.1rem;
+        }
+
+        .version {
+            display: inline-block;
+            background: rgba(59, 130, 246, 0.3);
+            color: #60a5fa;
+            padding: 0.25rem 1rem;
+            border-radius: 20px;
+            font-size: 0.875rem;
+            font-weight: 600;
+            margin-top: 1rem;
+        }
+
+        .card {
+            background: rgba(255, 255, 255, 0.08);
+            border-radius: 16px;
+            padding: 1.5rem 2rem;
+            margin-bottom: 1.5rem;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .card h2 {
+            color: #60a5fa;
+            font-size: 1.25rem;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .card h2::before {
+            content: '';
+            width: 4px;
+            height: 1.25rem;
+            background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+            border-radius: 4px;
+        }
+
+        ul {
+            list-style: none;
+            padding-left: 0;
+        }
+
+        ul li {
+            padding: 0.5rem 0;
+            padding-left: 1.5rem;
+            position: relative;
+            color: #cbd5e1;
+        }
+
+        ul li::before {
+            content: '✓';
+            position: absolute;
+            left: 0;
+            color: #22c55e;
+            font-weight: bold;
+        }
+
+        .warning-card {
+            background: rgba(234, 179, 8, 0.15);
+            border-color: rgba(234, 179, 8, 0.3);
+        }
+
+        .warning-card h2 {
+            color: #fbbf24;
+        }
+
+        .warning-card ul li::before {
+            content: '⚠';
+            color: #fbbf24;
+        }
+
+        .security-card {
+            background: rgba(22, 163, 74, 0.15);
+            border-color: rgba(22, 163, 74, 0.3);
+        }
+
+        .security-card h2 {
+            color: #4ade80;
+        }
+
+        .security-card ul li::before {
+            content: '🔒';
+        }
+
+        footer {
+            text-align: center;
+            padding: 2rem;
+            margin-top: 2rem;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .credits {
+            color: #94a3b8;
+            font-size: 0.875rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .credits strong {
+            color: #cbd5e1;
+        }
+
+        .quote {
+            font-style: italic;
+            color: #64748b;
+            font-size: 0.8125rem;
+        }
+
+        .back-link {
+            display: inline-block;
+            margin-top: 1.5rem;
+            padding: 0.75rem 2rem;
+            background: linear-gradient(135deg, #1e40af, #3b82f6);
+            color: white;
+            text-decoration: none;
+            border-radius: 12px;
+            font-weight: 600;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .back-link:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 30px rgba(59, 130, 246, 0.3);
+        }
+
+        @media (max-width: 600px) {
+            h1 {
+                font-size: 1.75rem;
+            }
+
+            .logo {
+                font-size: 3rem;
+            }
+
+            .card {
+                padding: 1rem 1.25rem;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <div class="logo">🥊</div>
+            <h1>RESISTÊNCIA MUAY THAI</h1>
+            <p class="subtitle">Sistema de Gestao para Academia</p>
+            <span class="version">v5 (IndexedDB)</span>
+        </header>
+
+        <div class="card">
+            <h2>Gestao de Alunos</h2>
+            <ul>
+                <li>Cadastro completo com nome, telefone, email, CPF, CEP e endereco</li>
+                <li>Preenchimento automatico de endereco via CEP</li>
+                <li>Data de nascimento e nome do responsavel para menores</li>
+                <li>Sistema de graduacoes do Muay Thai</li>
+                <li>Status ativo/inativo e visualizacao detalhada</li>
+            </ul>
+        </div>
+
+        <div class="card">
+            <h2>Controle Financeiro</h2>
+            <ul>
+                <li>Registro de pagamentos (PIX, Dinheiro, Cartao, Link)</li>
+                <li>Venda de itens avulsos</li>
+                <li>Controle de despesas por categoria</li>
+                <li>Calculo automatico de lucro mensal</li>
+                <li>Graficos de receita vs despesas (6 meses)</li>
+            </ul>
+        </div>
+
+        <div class="card">
+            <h2>Controle de Presencas</h2>
+            <ul>
+                <li>Marcacao rapida com um clique</li>
+                <li>Selecao de data para registros retroativos</li>
+                <li>Grafico de frequencia semanal</li>
+                <li>Historico completo por aluno</li>
+            </ul>
+        </div>
+
+        <div class="card">
+            <h2>Dashboard Inteligente</h2>
+            <ul>
+                <li>Estatisticas em tempo real</li>
+                <li>Aniversariantes do mes com destaque</li>
+                <li>Alertas de vencimentos e inadimplentes</li>
+                <li>Distribuicao por planos</li>
+            </ul>
+        </div>
+
+        <div class="card security-card">
+            <h2>Seguranca dos Dados</h2>
+            <ul>
+                <li>Dados armazenados SOMENTE no seu navegador</li>
+                <li>Nenhuma informacao enviada para servidores</li>
+                <li>Sistema funciona 100% offline</li>
+                <li>Protecao por senha na entrada</li>
+            </ul>
+        </div>
+
+        <div class="card warning-card">
+            <h2>Recomendacoes Importantes</h2>
+            <ul>
+                <li>Faca backups regulares (semanal ou apos grandes cadastros)</li>
+                <li>NAO limpe os dados do navegador sem fazer backup antes</li>
+                <li>Use sempre o mesmo navegador e dispositivo</li>
+                <li>Guarde os arquivos de backup em local seguro</li>
+            </ul>
+        </div>
+
+        <footer>
+            <p class="credits">
+                Feito por <strong>MTZ</strong>, <strong>Antigravity</strong> e <strong>Cursor</strong>
+            </p>
+            <p class="quote">"De trabalhadores, para trabalhadores."</p>
+            <a href="/" class="back-link">Voltar ao Sistema</a>
+        </footer>
+    </div>
+</body>
+
+</html>
