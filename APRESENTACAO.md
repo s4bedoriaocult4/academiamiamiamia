@@ -68,6 +68,13 @@ Sistema completo de gestao para academias de artes marciais, desenvolvido para f
 
 ---
 
+## RECOMENDAÇÕES:
+
+- Backups regulares (semanal ou apos grandes cadastros)
+- Nao limpar dados do navegador sem fazer backup antes
+
+---
+
 ## Versao
 
 v5 (IndexedDB)
