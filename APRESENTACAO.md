@@ -67,10 +67,11 @@ Sistema completo de gestao para academias de artes marciais, desenvolvido para f
 - Backup manual recomendado periodicamente
 
 ---
+
 ## RECOMENDAÇÕES:
 
--- BBackups regulares (semanal ou apos grandes cadastros)
--- Nao limpar dados do navegador sem fazer backup antes
+- Backups regulares (semanal ou apos grandes cadastros)
+- Nao limpar dados do navegador sem fazer backup antes
 
 ---
 
