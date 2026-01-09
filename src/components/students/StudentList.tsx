@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Plus, Search, Edit, Trash2, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Plus, Search, Edit, Trash2, ChevronLeft, ChevronRight, Eye } from 'lucide-react';
 import { useStudents } from '../../hooks/useGymStore';
 import { Student } from '../../types';
 import { db } from '../../services/db';
 import { StudentModal } from './StudentModal';
+import { StudentViewModal } from './StudentViewModal';
 
 export function StudentList() {
     const students = useStudents();
@@ -13,6 +14,8 @@ export function StudentList() {
     const [currentPage, setCurrentPage] = useState(1);
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [editingStudent, setEditingStudent] = useState<Student | null>(null);
+    const [isViewModalOpen, setIsViewModalOpen] = useState(false);
+    const [viewingStudent, setViewingStudent] = useState<Student | null>(null);
 
     // Helper to get plan name
     const getPlanName = (planId: string) => {
@@ -36,6 +39,11 @@ export function StudentList() {
     const handleEdit = (student: Student) => {
         setEditingStudent(student);
         setIsModalOpen(true);
+    };
+
+    const handleView = (student: Student) => {
+        setViewingStudent(student);
+        setIsViewModalOpen(true);
     };
 
     const handleDelete = async (id: string) => {
@@ -109,6 +117,9 @@ export function StudentList() {
                                             </td>
                                             <td>
                                                 <div className="action-buttons justify-end">
+                                                    <button onClick={() => handleView(student)} className="action-btn primary" title="Ver Cadastro">
+                                                        <Eye size={18} />
+                                                    </button>
                                                     <button onClick={() => handleEdit(student)} className="action-btn primary" title="Editar">
                                                         <Edit size={18} />
                                                     </button>
@@ -155,6 +166,12 @@ export function StudentList() {
                 isOpen={isModalOpen}
                 onClose={() => setIsModalOpen(false)}
                 studentToEdit={editingStudent}
+            />
+
+            <StudentViewModal
+                isOpen={isViewModalOpen}
+                onClose={() => setIsViewModalOpen(false)}
+                student={viewingStudent}
             />
         </div>
     );

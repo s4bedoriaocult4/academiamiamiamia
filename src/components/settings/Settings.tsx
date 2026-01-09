@@ -52,27 +52,108 @@ export function Settings() {
         const file = e.target.files?.[0];
         if (!file) return;
 
-        if (confirm('ATENÇÃO: Importar um backup irá SUBSTITUIR ou MESCLAR com os dados atuais. Recomendamos limpar os dados antes se quiser uma restauração completa. Deseja continuar?')) {
+        // Validação de tamanho (10MB máximo)
+        const MAX_SIZE = 10 * 1024 * 1024; // 10MB
+        if (file.size > MAX_SIZE) {
+            alert('Arquivo muito grande! O tamanho máximo é 10MB.');
+            e.target.value = '';
+            return;
+        }
+
+        // Validação de tipo
+        if (!file.name.endsWith('.json')) {
+            alert('Por favor, selecione um arquivo JSON válido.');
+            e.target.value = '';
+            return;
+        }
+
+        if (confirm('ATENÇÃO: Importar um backup irá SUBSTITUIR ou MESCLAR com os dados atuais. Recomendamos limpar os dados antes se quiser uma restauração completa.\n\nIMPORTANTE: Apenas importe backups que você mesmo exportou. Deseja continuar?')) {
             const reader = new FileReader();
             reader.onload = async (event) => {
                 try {
                     const json = event.target?.result as string;
-                    const data = JSON.parse(json) as AppData;
+                    
+                    // Validação básica de JSON
+                    if (!json || json.trim().length === 0) {
+                        throw new Error('Arquivo vazio ou inválido');
+                    }
+
+                    let data: AppData;
+                    try {
+                        data = JSON.parse(json) as AppData;
+                    } catch (parseError) {
+                        throw new Error('Arquivo JSON inválido ou corrompido');
+                    }
+
+                    // Validação de estrutura
+                    if (!data || typeof data !== 'object') {
+                        throw new Error('Estrutura de dados inválida');
+                    }
+
+                    // Validar arrays obrigatórios
+                    const requiredArrays = ['students', 'payments', 'attendance', 'expenses', 'dailyNotes'];
+                    for (const key of requiredArrays) {
+                        if (!Array.isArray(data[key as keyof AppData])) {
+                            throw new Error(`Campo '${key}' deve ser um array`);
+                        }
+                    }
+
+                    // Validação de tipos básicos e sanitização
+                    const sanitizeStudents = (students: any[]) => {
+                        return students.filter(s => {
+                            return s && 
+                                   typeof s.id === 'string' && 
+                                   typeof s.name === 'string' &&
+                                   typeof s.phone === 'string';
+                        }).map(s => ({
+                            ...s,
+                            id: String(s.id),
+                            name: String(s.name).substring(0, 200), // Limitar tamanho
+                            phone: String(s.phone).substring(0, 20)
+                        }));
+                    };
+
+                    const sanitizePayments = (payments: any[]) => {
+                        return payments.filter(p => {
+                            return p && 
+                                   typeof p.id === 'string' && 
+                                   typeof p.amount === 'number' &&
+                                   p.amount >= 0;
+                        }).map(p => ({
+                            ...p,
+                            id: String(p.id),
+                            amount: Math.max(0, Number(p.amount)),
+                            type: p.type || 'pagamento' // Default para backward compatibility
+                        }));
+                    };
+
+                    // Sanitizar dados
+                    const sanitizedData: AppData = {
+                        students: sanitizeStudents(data.students || []),
+                        payments: sanitizePayments(data.payments || []),
+                        attendance: (data.attendance || []).filter(a => a && typeof a.id === 'string'),
+                        expenses: (data.expenses || []).filter(e => e && typeof e.id === 'string'),
+                        dailyNotes: (data.dailyNotes || []).filter(n => n && typeof n.id === 'string'),
+                        darkMode: Boolean(data.darkMode),
+                        version: Number(data.version) || 1,
+                        lastModified: data.lastModified || new Date().toISOString(),
+                        lastBackup: data.lastBackup
+                    };
 
                     await db.transaction('rw', [db.students, db.payments, db.attendance, db.expenses, db.dailyNotes], async () => {
                         // Bulk put (upsert)
-                        if (data.students?.length) await db.students.bulkPut(data.students);
-                        if (data.payments?.length) await db.payments.bulkPut(data.payments);
-                        if (data.attendance?.length) await db.attendance.bulkPut(data.attendance);
-                        if (data.expenses?.length) await db.expenses.bulkPut(data.expenses);
-                        if (data.dailyNotes?.length) await db.dailyNotes.bulkPut(data.dailyNotes);
+                        if (sanitizedData.students.length > 0) await db.students.bulkPut(sanitizedData.students);
+                        if (sanitizedData.payments.length > 0) await db.payments.bulkPut(sanitizedData.payments);
+                        if (sanitizedData.attendance.length > 0) await db.attendance.bulkPut(sanitizedData.attendance);
+                        if (sanitizedData.expenses.length > 0) await db.expenses.bulkPut(sanitizedData.expenses);
+                        if (sanitizedData.dailyNotes.length > 0) await db.dailyNotes.bulkPut(sanitizedData.dailyNotes);
                     });
 
                     alert('Dados importados com sucesso! A página será recarregada.');
                     window.location.reload();
-                } catch (error) {
+                } catch (error: any) {
                     console.error(error);
-                    alert('Erro ao importar arquivo. Verifique se é um backup válido.');
+                    alert(`Erro ao importar arquivo: ${error.message || 'Arquivo inválido ou corrompido'}\n\nVerifique se é um backup válido exportado por este sistema.`);
                 }
             };
             reader.readAsText(file);
@@ -110,6 +191,9 @@ export function Settings() {
                         <p className="text-sm text-gray-600">
                             Faça backups regulares dos seus dados. O arquivo baixado contém todos os alunos, pagamentos e histórico.
                         </p>
+                        <div className="p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg text-yellow-800 dark:text-yellow-300 text-xs">
+                            <strong>⚠️ Segurança:</strong> Apenas importe backups que você mesmo exportou. Arquivos maliciosos podem comprometer seus dados.
+                        </div>
 
                         <div className="flex flex-col gap-3">
                             <button onClick={handleExport} className="btn btn-primary justify-center">

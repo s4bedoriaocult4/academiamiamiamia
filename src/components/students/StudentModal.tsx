@@ -12,8 +12,8 @@ interface StudentModalProps {
 
 export function StudentModal({ isOpen, onClose, studentToEdit }: StudentModalProps) {
     const [formData, setFormData] = useState<Partial<Student>>({
-        name: '', phone: '', email: '', plan: '1x', dueDay: 5,
-        startDate: new Date().toISOString().split('T')[0], graduation: 'Branca', notes: '', status: 'ativo'
+        name: '', phone: '', email: '', cpf: '', cep: '', address: '', plan: '1x', dueDay: 5,
+        startDate: new Date().toISOString().split('T')[0], graduation: 'Sem graduação', notes: '', status: 'ativo'
     });
 
     // Fetch Plans dynamically
@@ -24,8 +24,8 @@ export function StudentModal({ isOpen, onClose, studentToEdit }: StudentModalPro
             setFormData(studentToEdit);
         } else {
             setFormData({
-                name: '', phone: '', email: '', plan: '1x', dueDay: 5,
-                startDate: new Date().toISOString().split('T')[0], graduation: 'Branca', notes: '', status: 'ativo'
+                name: '', phone: '', email: '', cpf: '', cep: '', address: '', plan: '1x', dueDay: 5,
+                startDate: new Date().toISOString().split('T')[0], graduation: 'Sem graduação', notes: '', status: 'ativo'
             });
         }
     }, [studentToEdit, isOpen]);
@@ -89,7 +89,7 @@ export function StudentModal({ isOpen, onClose, studentToEdit }: StudentModalPro
                     dueDay: Number(formData.dueDay),
                     startDate: formData.startDate!,
                     nextDue: nextDue,
-                    graduation: formData.graduation || 'Branca',
+                    graduation: formData.graduation || 'Sem graduação',
                     status: 'ativo',
                     notes: formData.notes,
                     createdAt: new Date().toISOString()
@@ -115,6 +115,56 @@ export function StudentModal({ isOpen, onClose, studentToEdit }: StudentModalPro
     const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const formatted = formatPhone(e.target.value);
         setFormData({ ...formData, phone: formatted });
+    };
+
+    // CPF Mask helper
+    const formatCPF = (value: string) => {
+        const numbers = value.replace(/\D/g, '');
+        if (numbers.length <= 11) {
+            return numbers.replace(/(\d{3})(\d{3})(\d{3})(\d{0,2})/, (_match, p1, p2, p3, p4) => {
+                if (p4) return `${p1}.${p2}.${p3}-${p4}`;
+                if (p3) return `${p1}.${p2}.${p3}`;
+                if (p2) return `${p1}.${p2}`;
+                return p1;
+            });
+        }
+        return value;
+    };
+
+    const handleCPFChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const formatted = formatCPF(e.target.value);
+        setFormData({ ...formData, cpf: formatted });
+    };
+
+    // CEP Mask helper
+    const formatCEP = (value: string) => {
+        const numbers = value.replace(/\D/g, '');
+        if (numbers.length <= 8) {
+            return numbers.replace(/(\d{5})(\d{0,3})/, (_match, p1, p2) => {
+                if (p2) return `${p1}-${p2}`;
+                return p1;
+            });
+        }
+        return value;
+    };
+
+    const handleCEPChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const formatted = formatCEP(e.target.value);
+        setFormData({ ...formData, cep: formatted });
+        
+        // Tentar buscar endereço via ViaCEP se CEP completo
+        if (formatted.replace(/\D/g, '').length === 8) {
+            try {
+                const response = await fetch(`https://viacep.com.br/ws/${formatted.replace(/\D/g, '')}/json/`);
+                const data = await response.json();
+                if (!data.erro && data.logradouro) {
+                    const address = `${data.logradouro}${data.complemento ? ', ' + data.complemento : ''}, ${data.bairro}, ${data.localidade} - ${data.uf}`;
+                    setFormData(prev => ({ ...prev, cep: formatted, address: address }));
+                }
+            } catch (error) {
+                // Silenciosamente falha se API não disponível
+            }
+        }
     };
 
     // Age Calculation for Responsible Name hint
@@ -177,10 +227,54 @@ export function StudentModal({ isOpen, onClose, studentToEdit }: StudentModalPro
                         </div>
                     </div>
 
+                    <div className="grid grid-cols-2 gap-4" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                        <div className="form-group">
+                            <label className="form-label">CPF</label>
+                            <input
+                                className="form-input"
+                                value={formData.cpf || ''}
+                                onChange={handleCPFChange}
+                                placeholder="000.000.000-00"
+                                maxLength={14}
+                            />
+                        </div>
+                        <div className="form-group">
+                            <label className="form-label">CEP</label>
+                            <input
+                                className="form-input"
+                                value={formData.cep || ''}
+                                onChange={handleCEPChange}
+                                placeholder="00000-000"
+                                maxLength={9}
+                            />
+                        </div>
+                    </div>
+
+                    <div className="form-group">
+                        <label className="form-label">Endereço</label>
+                        <input
+                            className="form-input"
+                            value={formData.address || ''}
+                            onChange={e => setFormData({ ...formData, address: e.target.value })}
+                            placeholder="Rua, número, bairro, cidade - UF"
+                        />
+                    </div>
+
+                    <div className="form-group">
+                        <label className="form-label">Email</label>
+                        <input
+                            type="email"
+                            className="form-input"
+                            value={formData.email || ''}
+                            onChange={e => setFormData({ ...formData, email: e.target.value })}
+                            placeholder="email@exemplo.com"
+                        />
+                    </div>
+
                     {/* Responsible Name - Highlight if Minor */}
                     <div className="form-group">
                         <label className="form-label flex justify-between">
-                            Observações
+                            Nome do Responsável
                             {isMinor && <span className="text-xs text-red-500 font-bold">(Obrigatório para menores)</span>}
                         </label>
                         <input
@@ -235,6 +329,17 @@ export function StudentModal({ isOpen, onClose, studentToEdit }: StudentModalPro
                                 {GRADUATIONS.map(g => <option key={g} value={g}>{g}</option>)}
                             </select>
                         </div>
+                    </div>
+
+                    <div className="form-group">
+                        <label className="form-label">Observações</label>
+                        <textarea
+                            className="form-input"
+                            value={formData.notes || ''}
+                            onChange={e => setFormData({ ...formData, notes: e.target.value })}
+                            placeholder="Observações sobre o aluno..."
+                            rows={3}
+                        />
                     </div>
 
                     {studentToEdit && (

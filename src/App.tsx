@@ -15,6 +15,7 @@ import { PaymentList } from './components/payments/PaymentList';
 import { AttendanceManager } from './components/attendance/AttendanceManager';
 import { ExpenseList } from './components/financial/ExpenseList';
 import { Settings as SettingsPage } from './components/settings/Settings';
+import { LoginPage } from './components/auth/LoginPage';
 
 
 function App() {
@@ -22,6 +23,7 @@ function App() {
     // const settings = useSettings();
     const [activeTab, setActiveTab] = useState('dashboard');
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+    const [isAuthenticated, setIsAuthenticated] = useState(false);
 
     // Dark Mode Logic
     const [darkMode, setDarkMode] = useState(false);
@@ -36,6 +38,26 @@ function App() {
         };
         if (isDbReady) loadTheme();
     }, [isDbReady]);
+
+    // Verificar autenticação
+    useEffect(() => {
+        const checkAuth = async () => {
+            if (!isDbReady) return;
+            
+            const savedPassword = await db.settings.get('appPassword');
+            const remembered = sessionStorage.getItem('gym_remembered');
+            
+            // Se não há senha configurada ou está lembrado, permitir acesso
+            if (!savedPassword?.value || remembered === 'true') {
+                setIsAuthenticated(true);
+            }
+        };
+        checkAuth();
+    }, [isDbReady]);
+
+    const handleLogin = () => {
+        setIsAuthenticated(true);
+    };
 
     const toggleDarkMode = async () => {
         const newToken = !darkMode;
@@ -55,6 +77,11 @@ function App() {
                 </div>
             </div>
         );
+    }
+
+    // Mostrar tela de login se não autenticado
+    if (!isAuthenticated) {
+        return <LoginPage onLogin={handleLogin} />;
     }
 
     const renderContent = () => {

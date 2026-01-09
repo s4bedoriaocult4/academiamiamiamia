@@ -5,6 +5,9 @@ export interface Student {
     name: string;
     phone: string;
     email?: string;
+    cpf?: string;
+    cep?: string;
+    address?: string;
     plan: string;
     dueDay: number;
     startDate: string;
@@ -19,12 +22,15 @@ export interface Student {
 
 export interface Payment {
     id: string;
-    studentId: string;
-    studentName: string;
+    studentId?: string; // Opcional para itens vendidos
+    studentName?: string; // Opcional para itens vendidos
     amount: number;
     method: 'PIX' | 'Dinheiro' | 'Cartão Crédito' | 'Link Pagamento';
     date: string;
-    referenceMonth: string;
+    referenceMonth?: string; // Opcional para itens vendidos
+    type?: 'pagamento' | 'item_vendido'; // Opcional para backward compatibility (default: 'pagamento')
+    itemDescription?: string; // Para itens vendidos
+    lateFee?: number; // Multa por atraso
     createdAt: string;
 }
 
@@ -74,19 +80,22 @@ export interface AppData {
     lastBackup?: string;
 }
 
-// Graduações do Muay Thai (Prajied)
+// Graduações do Muay Thai
 export const GRADUATIONS = [
-    'Branca',
-    'Branca Ponta Vermelha',
-    'Vermelha',
-    'Vermelha Ponta Azul Escuro',
-    'Azul Escuro',
-    'Azul Escuro Ponta Azul Claro',
-    'Azul Claro',
-    'Azul Claro Ponta Verde',
+    'Sem graduação',
+    'Branco',
+    'Amarelo',
+    'Amarelo-branco',
     'Verde',
-    'Verde Ponta Preta',
-    'Preta'
+    'Verde-branco',
+    'Azul',
+    'Azul-branco',
+    'Marrom',
+    'Marrom-branco',
+    'Vermelho',
+    'Vermelho-branco',
+    'Preto',
+    'Preto-branco'
 ];
 
 // Dias de vencimento disponíveis

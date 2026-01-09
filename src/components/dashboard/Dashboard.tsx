@@ -1,5 +1,5 @@
 import {
-    Users, DollarSign, Clock, AlertCircle, Printer
+    Users, DollarSign, Clock, AlertCircle, Printer, Cake
 } from 'lucide-react';
 import {
     BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -59,6 +59,28 @@ export function Dashboard() {
     const dueThisWeek = activeStudents.filter(s => {
         const days = getDaysUntilDue(s.nextDue);
         return days >= 0 && days <= 7;
+    });
+
+    // Aniversariantes do mês
+    const getBirthdayStudents = () => {
+        return activeStudents.filter(s => {
+            if (!s.birthDate) return false;
+            const birth = new Date(s.birthDate);
+            const birthMonth = birth.getMonth();
+            return birthMonth === currentMonth;
+        }).sort((a, b) => {
+            if (!a.birthDate || !b.birthDate) return 0;
+            const aDay = new Date(a.birthDate).getDate();
+            const bDay = new Date(b.birthDate).getDate();
+            return aDay - bDay;
+        });
+    };
+
+    const birthdayStudents = getBirthdayStudents();
+    const todayBirthdays = birthdayStudents.filter(s => {
+        if (!s.birthDate) return false;
+        const birth = new Date(s.birthDate);
+        return birth.getMonth() === currentMonth && birth.getDate() === today.getDate();
     });
 
     // Chart Data
@@ -226,6 +248,43 @@ export function Dashboard() {
                     </ResponsiveContainer>
                 </div>
             </div>
+
+            {/* Aniversariantes do Mês */}
+            {birthdayStudents.length > 0 && (
+                <div className={`alert ${todayBirthdays.length > 0 ? 'alert-warning' : 'alert-info'}`}>
+                    <Cake size={20} />
+                    <div className="alert-content">
+                        <p className="alert-title">
+                            🎂 Aniversariantes do Mês {todayBirthdays.length > 0 && ' - Hoje é aniversário!'}
+                        </p>
+                        <div className="mt-2 space-y-2">
+                            {birthdayStudents.map(s => {
+                                if (!s.birthDate) return null;
+                                const birth = new Date(s.birthDate);
+                                const isToday = birth.getMonth() === currentMonth && birth.getDate() === today.getDate();
+                                const day = birth.getDate();
+                                return (
+                                    <div 
+                                        key={s.id} 
+                                        className={`flex justify-between text-sm py-1 border-b ${isToday ? 'border-yellow-300 font-bold text-yellow-800' : 'border-blue-200'} last:border-0`}
+                                        style={{ 
+                                            display: 'flex', 
+                                            justifyContent: 'space-between', 
+                                            padding: '0.5rem 0',
+                                            fontWeight: isToday ? 'bold' : 'normal'
+                                        }}
+                                    >
+                                        <span>{s.name} {isToday && '🎉'}</span>
+                                        <span className="font-bold">
+                                            Dia {day}
+                                        </span>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* Alerts */}
             {overdueStudents.length > 0 && (

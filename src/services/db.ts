@@ -34,6 +34,17 @@ class GymDatabase extends Dexie implements GymDatabaseInfo {
     constructor() {
         super('GymDatabase');
 
+        // Versão 4: Adicionando campos CPF, CEP, address e suporte a itens vendidos
+        this.version(4).stores({
+            students: 'id, name, status, plan, nextDue, responsibleName, cpf, cep', // Added cpf and cep indexes
+            payments: 'id, studentId, date, referenceMonth, type', // Added type index
+            attendance: 'id, studentId, date',
+            expenses: 'id, date, category',
+            dailyNotes: 'id, date',
+            settings: 'key',
+            plans: 'id, name'
+        });
+
         // Versão 3: Adicionando tabela de planos
         this.version(3).stores({
             students: 'id, name, status, plan, nextDue, responsibleName', // Added responsibleName index
