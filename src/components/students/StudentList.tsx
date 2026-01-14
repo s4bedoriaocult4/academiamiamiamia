@@ -100,14 +100,27 @@ export function StudentList() {
                                 </tr>
                             ) : (
                                 paginatedStudents.map(student => {
+                                    const planType = student.planType || 'normal';
+                                    const showNormal = planType === 'normal' || planType === 'both';
+                                    const showPersonal = planType === 'personal' || planType === 'both';
+
                                     return (
                                         <tr key={student.id}>
                                             <td className="font-medium">{student.name}</td>
                                             <td>{student.phone}</td>
                                             <td className="px-6 py-4 whitespace-nowrap">
-                                                <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-blue-100 text-blue-800">
-                                                    {getPlanName(student.plan)}
-                                                </span>
+                                                <div className="flex flex-col gap-1 items-start">
+                                                    {showNormal && (
+                                                        <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-blue-100 text-blue-800">
+                                                            {getPlanName(student.plan)}
+                                                        </span>
+                                                    )}
+                                                    {showPersonal && (
+                                                        <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-indigo-100 text-indigo-800">
+                                                            Personal
+                                                        </span>
+                                                    )}
+                                                </div>
                                             </td>
                                             <td><span className="badge badge-primary">{student.graduation}</span></td>
                                             <td>

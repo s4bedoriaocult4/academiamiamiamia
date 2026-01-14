@@ -20,12 +20,6 @@ export function AttendanceManager() {
     // Filter Logic
     const selectedDateAttendance = allAttendance.filter(a => a.date === selectedDate);
 
-    // Helper to get plan name
-    const getPlanName = (planId: string) => {
-        const plan = plans.find(p => p.id === planId);
-        return plan ? plan.name : planId;
-    };
-
     // Chart Data
     const getWeeklyAttendance = () => {
         const days = [];
@@ -41,18 +35,20 @@ export function AttendanceManager() {
     };
 
     const handleCheckIn = async (studentId: string) => {
-        const existing = selectedDateAttendance.find(a => a.studentId === studentId);
-        if (existing) return;
-
         const student = students.find(s => s.id === studentId);
         if (!student) return;
+
+        // "Normal" check-in logic only
+        const existing = selectedDateAttendance.find(a => a.studentId === studentId && a.attendanceType !== 'personal');
+        if (existing) return;
 
         const newAttendance: Attendance = {
             id: Date.now().toString(),
             studentId,
             studentName: student.name,
             date: selectedDate,
-            createdAt: new Date().toISOString()
+            createdAt: new Date().toISOString(),
+            attendanceType: 'normal' // Always normal here
         };
 
         try {
@@ -63,9 +59,27 @@ export function AttendanceManager() {
         }
     };
 
-    const handleDelete = async (id: string) => {
+    const handleDelete = async (att: Attendance) => {
         if (confirm('Remover presença?')) {
-            await db.attendance.delete(id);
+            try {
+                await db.transaction('rw', db.attendance, db.students, async () => {
+                    await db.attendance.delete(att.id);
+
+                    // If we delete a 'personal' attendance from here (view only), restore balance
+                    if (att.attendanceType === 'personal') {
+                        const student = await db.students.get(att.studentId);
+                        if (student) {
+                            const current = student.personalClassesRemaining || 0;
+                            await db.students.update(att.studentId, {
+                                personalClassesRemaining: current + 1
+                            });
+                        }
+                    }
+                });
+            } catch (error) {
+                console.error(error);
+                alert('Erro ao remover presença');
+            }
         }
     };
 
@@ -185,7 +199,7 @@ export function AttendanceManager() {
                         {activeStudents
                             .filter(s => s.name.toLowerCase().includes(searchTerm.toLowerCase()))
                             .map(student => {
-                                const hasAttendance = selectedDateAttendance.some(a => a.studentId === student.id);
+                                const hasAttendance = selectedDateAttendance.some(a => a.studentId === student.id && a.attendanceType !== 'personal');
                                 const plan = plans.find(p => p.id === student.plan);
 
                                 return (
@@ -199,7 +213,9 @@ export function AttendanceManager() {
                                             {hasAttendance && <Check size={22} style={{ color: 'var(--success)' }} />}
                                         </div>
                                         <div className="attendance-card-info">
-                                            <span className="text-xs" style={{ color: 'var(--gray-500)' }}>{plan?.name}</span>
+                                            <div className="flex flex-col">
+                                                <span className="text-xs" style={{ color: 'var(--gray-500)' }}>{plan?.name}</span>
+                                            </div>
                                             <span className="time">{hasAttendance ? '✓ Presente' : 'Clique para marcar'}</span>
                                         </div>
                                     </div>
@@ -225,19 +241,18 @@ export function AttendanceManager() {
                             </div>
                         ) : (
                             selectedDateAttendance.map(att => {
-                                const student = students.find(s => s.id === att.studentId);
                                 return (
                                     <div key={att.id} className="record-item">
                                         <div className="record-info">
                                             <span className="record-name">{att.studentName}</span>
-                                            {student && (
-                                                <span className="record-details">
-                                                    {getPlanName(student.plan)} • {student.graduation}
-                                                </span>
+                                            {att.attendanceType === 'personal' ? (
+                                                <span className="badge badge-blue ml-2 text-xs">Personal</span>
+                                            ) : (
+                                                <span className="badge badge-success ml-2 text-xs">Normal</span>
                                             )}
                                         </div>
                                         <button
-                                            onClick={() => handleDelete(att.id)}
+                                            onClick={() => handleDelete(att)}
                                             className="record-delete"
                                             title="Remover presença"
                                         >
@@ -253,4 +268,3 @@ export function AttendanceManager() {
         </div>
     );
 }
-

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { X } from 'lucide-react';
+import { X, DollarSign } from 'lucide-react';
 import { Payment, PAYMENT_METHODS } from '../../types';
 import { db } from '../../services/db';
 import { useStudents } from '../../hooks/useGymStore';
@@ -9,193 +9,306 @@ interface PaymentModalProps {
     isOpen: boolean;
     onClose: () => void;
     paymentToEdit?: Payment | null;
+    initialData?: Partial<Payment>; // New prop for pre-filling data without implying "Edit Mode"
 }
 
-export function PaymentModal({ isOpen, onClose, paymentToEdit }: PaymentModalProps) {
+export function PaymentModal({ isOpen, onClose, paymentToEdit, initialData }: PaymentModalProps) {
     const students = useStudents();
     const activeStudents = students.filter(s => s.status === 'ativo');
     const plans = useLiveQuery(() => db.plans.toArray()) || [];
+    const personalPlans = useLiveQuery(() => db.personalPlans.toArray()) || [];
 
-    const [formData, setFormData] = useState<Partial<Payment>>({
-        type: 'pagamento', studentId: '', amount: 0, method: 'PIX', date: new Date().toISOString().split('T')[0], referenceMonth: new Date().toISOString().slice(0, 7), itemDescription: '', lateFee: undefined
-    });
+    const defaultFormData: Partial<Payment> = {
+        type: 'pagamento',
+        studentId: '',
+        amount: 0,
+        method: 'PIX',
+        date: new Date().toISOString().split('T')[0],
+        referenceMonth: new Date().toISOString().slice(0, 7),
+        itemDescription: '',
+        lateFee: undefined
+    };
+
+    const [formData, setFormData] = useState<Partial<Payment>>(defaultFormData);
+    const [selectedPackageId, setSelectedPackageId] = useState<string>('');
 
     useEffect(() => {
         if (paymentToEdit) {
-            setFormData({
-                ...paymentToEdit,
-                type: paymentToEdit.type || 'pagamento' // Garantir type para pagamentos antigos
-            });
+            setFormData(paymentToEdit);
+            // If editing, we generally don't reset package selection logic as it's complex to infer back
+        } else if (initialData) {
+            setFormData({ ...defaultFormData, ...initialData });
         } else {
-            setFormData({
-                type: 'pagamento', studentId: '', amount: 0, method: 'PIX', date: new Date().toISOString().split('T')[0], referenceMonth: new Date().toISOString().slice(0, 7), itemDescription: '', lateFee: undefined
-            });
+            setFormData(defaultFormData);
         }
-    }, [paymentToEdit, isOpen]);
 
-    // Auto-fill amount when selecting student
-    const handleStudentChange = (studentId: string) => {
-        const student = students.find(s => s.id === studentId);
-        let amount = formData.amount;
-        if (student) {
-            const plan = plans.find(p => p.id === student.plan);
-            if (plan) amount = plan.price;
+        // Reset package selection when opening fresh or with new initial data
+        if (!paymentToEdit) {
+            setSelectedPackageId('');
         }
-        setFormData({ ...formData, studentId, amount });
+    }, [paymentToEdit, initialData, isOpen]);
+
+    // Lógica para preencher valor ao selecionar aluno (apenas para Mensalidade "Normal")
+    useEffect(() => {
+        if (!paymentToEdit && !initialData?.amount && formData.type === 'pagamento' && formData.studentId) {
+            const student = activeStudents.find(s => s.id === formData.studentId);
+            if (student && student.plan) {
+                const plan = plans.find(p => p.id === student.plan);
+                if (plan) {
+                    setFormData(prev => ({ ...prev, amount: plan.price }));
+                }
+            }
+        }
+    }, [formData.studentId, formData.type, plans, activeStudents, paymentToEdit, initialData]);
+
+    // Logic for Package Selection
+    const handlePackageSelect = (packageId: string) => {
+        setSelectedPackageId(packageId);
+        const pkg = personalPlans.find(p => p.id === packageId);
+        if (pkg) {
+            setFormData(prev => ({
+                ...prev,
+                amount: pkg.price,
+                itemDescription: `Pacote Personal: ${pkg.name}`
+            }));
+        }
     };
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
 
+        // Validação de valor
         if (!formData.amount || formData.amount <= 0) {
-            alert('Preencha o valor');
+            alert('O valor deve ser maior que zero');
             return;
         }
 
-        if (formData.type === 'pagamento' && !formData.studentId) {
-            alert('Selecione um aluno para o pagamento');
+        // Validação de aluno (exceto para entradas avulsas)
+        if (formData.type !== 'entrada' && !formData.studentId) {
+            alert('Selecione um aluno');
             return;
         }
 
-        if (formData.type === 'item_vendido' && !formData.itemDescription) {
-            alert('Preencha a descrição do item vendido');
+        // Validação de pacote para Personal
+        if (formData.type === 'personal' && !paymentToEdit && !selectedPackageId) {
+            alert('Selecione um pacote Personal');
             return;
         }
 
         try {
+            const student = students.find(s => s.id === formData.studentId);
+            const studentName = student ? student.name : undefined;
+
             if (paymentToEdit) {
-                const updateData: Partial<Payment> = {
+                await db.payments.update(paymentToEdit.id, {
                     ...formData,
-                    amount: Number(formData.amount),
-                    lateFee: formData.lateFee ? Number(formData.lateFee) : undefined
-                };
-
-                if (formData.type === 'pagamento' && formData.studentId) {
-                    const student = students.find(s => s.id === formData.studentId);
-                    if (student) {
-                        updateData.studentName = student.name;
-                    }
-                }
-
-                await db.payments.update(paymentToEdit.id, updateData);
+                    studentName
+                });
             } else {
-                const newPayment: Payment = {
+                await db.payments.add({
+                    ...formData,
                     id: Date.now().toString(),
-                    type: (formData.type || 'pagamento') as 'pagamento' | 'item_vendido',
-                    amount: Number(formData.amount),
-                    method: formData.method as any,
-                    date: formData.date!,
-                    createdAt: new Date().toISOString(),
-                    lateFee: formData.lateFee ? Number(formData.lateFee) : undefined
-                };
+                    studentName,
+                    createdAt: new Date().toISOString()
+                } as Payment);
 
-                if (formData.type === 'pagamento') {
-                    const student = students.find(s => s.id === formData.studentId);
-                    if (!student) {
-                        alert('Aluno não encontrado');
-                        return;
-                    }
-                    newPayment.studentId = formData.studentId!;
-                    newPayment.studentName = student.name;
-                    newPayment.referenceMonth = formData.referenceMonth!;
+                // SIDE EFFECTS (Only on Creation)
+                if (formData.studentId) {
+                    // 1. Mensalidade -> Update Next Due
+                    if (formData.type === 'pagamento') {
+                        const currentRef = new Date(formData.referenceMonth + '-05');
+                        const nextMonth = new Date(currentRef);
+                        nextMonth.setMonth(nextMonth.getMonth() + 1);
+                        const dueDay = student?.dueDay || 5;
+                        nextMonth.setDate(dueDay);
 
-                    // Transaction: Add Payment AND Update Student Next Due
-                    await db.transaction('rw', db.payments, db.students, async () => {
-                        await db.payments.add(newPayment);
-
-                        // Simple logic: add 1 month to nextDue
-                        const currentDue = new Date(student.nextDue);
-                        currentDue.setMonth(currentDue.getMonth() + 1);
-                        await db.students.update(student.id, {
-                            nextDue: currentDue.toISOString().split('T')[0]
+                        await db.students.update(formData.studentId, {
+                            nextDue: nextMonth.toISOString().split('T')[0]
                         });
-                    });
-                } else {
-                    // Item vendido - não precisa de aluno nem atualizar nextDue
-                    newPayment.itemDescription = formData.itemDescription;
-                    await db.payments.add(newPayment);
+                    }
+
+                    // 2. Personal Package -> Add Credits
+                    if (formData.type === 'personal') {
+                        let classesToAdd = 0;
+                        const pkg = personalPlans.find(p => p.id === selectedPackageId);
+
+                        // If package selected, use its class count
+                        if (pkg) {
+                            classesToAdd = pkg.totalClasses;
+                        }
+                        // Fallback: If no package selected but user manually entered amount/description, maybe they want to add credits?
+                        // Current logic: strict package selection for credits to ensure data integrity.
+                        // If they want manual credits, they can edit student profile.
+
+                        if (classesToAdd > 0) {
+                            const currentCredits = student?.personalClassesRemaining || 0;
+                            await db.students.update(formData.studentId, {
+                                personalClassesRemaining: currentCredits + classesToAdd,
+                                // Ensure legacy visual badge works if needed
+                                planType: (student?.planType === 'normal' || !student?.planType) ? 'both' : student?.planType
+                            });
+                            alert(`Pacote comprado! Adicionado +${classesToAdd} aulas ao saldo.`);
+                        }
+                    }
                 }
             }
             onClose();
         } catch (error) {
             console.error(error);
-            alert('Erro ao salvar transação');
+            alert('Erro ao salvar pagamento');
         }
     };
 
-    const isPayment = (formData.type || 'pagamento') === 'pagamento';
-    const isItemSold = formData.type === 'item_vendido';
+    // Verificar se há dados não salvos
+    const hasUnsavedChanges = (): boolean => {
+        if (paymentToEdit) return false; // Edição é mais complexa, simplificar
+        // Para novo pagamento, verificar se preencheu algo significativo
+        return !!(formData.studentId || (formData.amount && formData.amount > 0) || formData.itemDescription || selectedPackageId);
+    };
+
+    const handleClose = () => {
+        if (hasUnsavedChanges()) {
+            if (confirm('Você tem dados não salvos. Deseja realmente sair?')) {
+                onClose();
+            }
+        } else {
+            onClose();
+        }
+    };
 
     if (!isOpen) return null;
 
     return (
-        <div className="modal-overlay" onClick={onClose}>
+        <div className="modal-overlay" onClick={handleClose}>
             <div className="modal" onClick={e => e.stopPropagation()}>
                 <div className="modal-header">
-                    <h3>{paymentToEdit ? '💰 Editar Pagamento' : '💰 Novo Pagamento'}</h3>
-                    <button onClick={onClose} className="action-btn"><X size={20} /></button>
+                    <h3>{paymentToEdit ? '✏️ Editar Pagamento' : '💰 Nova Transação'}</h3>
+                    <button onClick={handleClose} className="action-btn"><X size={20} /></button>
                 </div>
                 <form onSubmit={handleSubmit} className="modal-body">
+
+                    {/* TYPE SELECTION - DROPDOWN */}
                     <div className="form-group">
-                        <label className="form-label">Tipo de Transação *</label>
+                        <label className="form-label">Tipo de Transação</label>
                         <select
-                            required
-                            className="form-select"
+                            className="form-select font-medium text-gray-700 bg-gray-50 border-gray-300 focus:border-blue-500 focus:ring-blue-500"
                             value={formData.type}
-                            onChange={e => setFormData({ ...formData, type: e.target.value as 'pagamento' | 'item_vendido' })}
-                            disabled={!!paymentToEdit}
+                            onChange={e => {
+                                const newType = e.target.value as any;
+                                setFormData(prev => ({
+                                    ...prev,
+                                    type: newType,
+                                    itemDescription: newType === 'personal' ? 'Pacote Personal' : '',
+                                    // Reset specific fields if switching types
+                                    studentId: newType === 'entrada' ? '' : prev.studentId
+                                }));
+                            }}
                         >
-                            <option value="pagamento">Pagamento</option>
-                            <option value="item_vendido">Item Vendido</option>
+                            <option value="pagamento">💰 Mensalidade</option>
+                            <option value="personal">🏋️ Pacote Personal</option>
+                            <option value="entrada">🛍️ Entrada / Venda Avulsa</option>
                         </select>
                     </div>
 
-                    {isPayment && (
+                    {/* DYNAMIC FIELDS */}
+
+                    {/* 1. STUDENT SELECTOR (For Mensalidade & Personal) */}
+                    {formData.type !== 'entrada' && (
                         <div className="form-group">
-                            <label className="form-label">Aluno *</label>
+                            <label className="form-label">Aluno</label>
                             <select
-                                required={isPayment}
+                                required
                                 className="form-select"
                                 value={formData.studentId}
-                                onChange={e => handleStudentChange(e.target.value)}
-                                disabled={!!paymentToEdit}
+                                onChange={e => setFormData({ ...formData, studentId: e.target.value })}
                             >
-                                <option value="">Selecione...</option>
-                                {activeStudents
-                                    .sort((a, b) => a.name.localeCompare(b.name))
-                                    .map(s => <option key={s.id} value={s.id}>{s.name}</option>)
-                                }
+                                <option value="">Selecione um aluno...</option>
+                                {activeStudents.map(s => (
+                                    <option key={s.id} value={s.id}>{s.name}</option>
+                                ))}
                             </select>
                         </div>
                     )}
 
-                    {isItemSold && (
+                    {/* 2. PERSONAL PACKAGE SELECTOR */}
+                    {formData.type === 'personal' && !paymentToEdit && (
                         <div className="form-group">
-                            <label className="form-label">Descrição do Item *</label>
+                            <label className="form-label">Selecionar Pacote</label>
+                            <select
+                                required={true} // Force package selection for simplicity in adding credits
+                                className="form-select"
+                                value={selectedPackageId}
+                                onChange={e => handlePackageSelect(e.target.value)}
+                            >
+                                <option value="">Selecione o pacote...</option>
+                                {personalPlans.map(p => (
+                                    <option key={p.id} value={p.id}>
+                                        {p.name} ({p.totalClasses} aulas) - R$ {p.price}
+                                    </option>
+                                ))}
+                            </select>
+                            <p className="text-xs text-gray-500 mt-1">
+                                O saldo de aulas será atualizado automaticamente ao salvar.
+                            </p>
+                        </div>
+                    )}
+
+                    {/* 3. ITEM DESCRIPTION (For Entrada) */}
+                    {formData.type === 'entrada' && (
+                        <div className="form-group">
+                            <label className="form-label">Descrição do Item</label>
                             <input
-                                required={isItemSold}
+                                required
                                 className="form-input"
+                                placeholder="Ex: Água, Camiseta, Luva..."
                                 value={formData.itemDescription || ''}
                                 onChange={e => setFormData({ ...formData, itemDescription: e.target.value })}
-                                placeholder="Ex: Luva, Shorts, Protetor bucal..."
                             />
                         </div>
                     )}
 
-                    <div className="form-group">
-                        <label className="form-label">Valor (R$) *</label>
-                        <input
-                            type="number"
-                            step="0.01"
-                            required
-                            className="form-input"
-                            value={formData.amount}
-                            onChange={e => setFormData({ ...formData, amount: Number(e.target.value) })}
-                        />
+                    {/* 4. REFERENCE MONTH (For Mensalidade) */}
+                    {formData.type === 'pagamento' && (
+                        <div className="form-group">
+                            <label className="form-label">Mês de Referência</label>
+                            <input
+                                type="month"
+                                className="form-input"
+                                value={formData.referenceMonth}
+                                onChange={e => setFormData({ ...formData, referenceMonth: e.target.value })}
+                            />
+                        </div>
+                    )}
+
+                    <div className="grid grid-cols-2 gap-4">
+                        <div className="form-group">
+                            <label className="form-label">Valor (R$)</label>
+                            <div className="relative">
+                                <span className="absolute left-3 top-2.5 text-gray-500">R$</span>
+                                <input
+                                    type="number"
+                                    step="0.01"
+                                    required
+                                    className="form-input pl-8"
+                                    value={formData.amount}
+                                    onChange={e => setFormData({ ...formData, amount: Number(e.target.value) })}
+                                />
+                            </div>
+                        </div>
+                        <div className="form-group">
+                            <label className="form-label">Data Pagamento</label>
+                            <input
+                                type="date"
+                                required
+                                className="form-input"
+                                value={formData.date}
+                                onChange={e => setFormData({ ...formData, date: e.target.value })}
+                            />
+                        </div>
                     </div>
 
                     <div className="form-group">
-                        <label className="form-label">Método</label>
+                        <label className="form-label">Método de Pagamento</label>
                         <select
                             className="form-select"
                             value={formData.method}
@@ -205,50 +318,26 @@ export function PaymentModal({ isOpen, onClose, paymentToEdit }: PaymentModalPro
                         </select>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-4" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                        <div className="form-group">
-                            <label className="form-label">Data</label>
-                            <input
-                                type="date"
-                                required
-                                className="form-input"
-                                value={formData.date}
-                                onChange={e => setFormData({ ...formData, date: e.target.value })}
-                            />
-                        </div>
-                        {isPayment && (
-                            <div className="form-group">
-                                <label className="form-label">Referência</label>
+                    {formData.type === 'pagamento' && (
+                        <div className="form-group p-3 bg-red-50 rounded border border-red-100">
+                            <label className="form-label text-red-700">Multa / Juros (Opcional)</label>
+                            <div className="relative">
+                                <span className="absolute left-3 top-2.5 text-red-400">R$</span>
                                 <input
-                                    type="month"
-                                    required={isPayment}
-                                    className="form-input"
-                                    value={formData.referenceMonth || ''}
-                                    onChange={e => setFormData({ ...formData, referenceMonth: e.target.value })}
+                                    type="number"
+                                    step="0.01"
+                                    className="form-input pl-8 border-red-200 focus:border-red-500"
+                                    value={formData.lateFee || ''}
+                                    onChange={e => setFormData({ ...formData, lateFee: Number(e.target.value) })}
+                                    placeholder="0.00"
                                 />
                             </div>
-                        )}
-                    </div>
-
-                    {isPayment && (
-                        <div className="form-group">
-                            <label className="form-label">Multa por Atraso (R$)</label>
-                            <input
-                                type="number"
-                                step="0.01"
-                                min="0"
-                                className="form-input"
-                                value={formData.lateFee || ''}
-                                onChange={e => setFormData({ ...formData, lateFee: e.target.value ? Number(e.target.value) : undefined })}
-                                placeholder="Valor da multa (opcional)"
-                            />
-                            <p className="text-xs text-gray-500 mt-1">Preencha se o pagamento estiver atrasado</p>
                         </div>
                     )}
 
                     <div className="form-group pt-4">
                         <button type="submit" className="btn btn-primary w-full" style={{ width: '100%' }}>
-                            {isPayment ? 'Confirmar Pagamento' : 'Confirmar Venda'}
+                            <DollarSign size={18} /> Confirmar Pagamento
                         </button>
                     </div>
                 </form>

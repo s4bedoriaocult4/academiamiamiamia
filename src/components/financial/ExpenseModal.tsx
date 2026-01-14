@@ -54,14 +54,30 @@ export function ExpenseModal({ isOpen, onClose, expenseToEdit }: ExpenseModalPro
         }
     };
 
+    // Verificar se há dados não salvos
+    const hasUnsavedChanges = (): boolean => {
+        if (expenseToEdit) return false; // Edição simplificada
+        return !!(formData.description || (formData.amount && formData.amount > 0));
+    };
+
+    const handleClose = () => {
+        if (hasUnsavedChanges()) {
+            if (confirm('Você tem dados não salvos. Deseja realmente sair?')) {
+                onClose();
+            }
+        } else {
+            onClose();
+        }
+    };
+
     if (!isOpen) return null;
 
     return (
-        <div className="modal-overlay" onClick={onClose}>
+        <div className="modal-overlay" onClick={handleClose}>
             <div className="modal" onClick={e => e.stopPropagation()}>
                 <div className="modal-header">
                     <h3>{expenseToEdit ? '💸 Editar Despesa' : '💸 Nova Despesa'}</h3>
-                    <button onClick={onClose} className="action-btn"><X size={20} /></button>
+                    <button onClick={handleClose} className="action-btn"><X size={20} /></button>
                 </div>
                 <form onSubmit={handleSubmit} className="modal-body">
                     <div className="form-group">

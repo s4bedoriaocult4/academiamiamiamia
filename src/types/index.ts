@@ -18,19 +18,24 @@ export interface Student {
     responsibleName?: string; // For minors
     createdAt: string;
     notes?: string;
+    // Campos para plano Personal (opcionais para compatibilidade)
+    planType?: 'normal' | 'personal' | 'both'; // Tipo de plano do aluno
+    personalPlanId?: string; // ID do plano personal (se tiver)
+    personalClassesRemaining?: number; // Aulas restantes do pacote personal
+    personalStartDate?: string; // Data de início do pacote personal
 }
 
 export interface Payment {
     id: string;
-    studentId?: string; // Opcional para itens vendidos
-    studentName?: string; // Opcional para itens vendidos
+    studentId?: string; // Opcional para entradas avulsas
+    studentName?: string; // Opcional para entradas avulsas
     amount: number;
     method: 'PIX' | 'Dinheiro' | 'Cartão Crédito' | 'Link Pagamento';
     date: string;
-    referenceMonth?: string; // Opcional para itens vendidos
-    type?: 'pagamento' | 'item_vendido'; // Opcional para backward compatibility (default: 'pagamento')
-    itemDescription?: string; // Para itens vendidos
-    lateFee?: number; // Multa por atraso
+    referenceMonth?: string; // Opcional para entradas
+    type?: 'pagamento' | 'entrada' | 'personal' | 'item_vendido'; // 'entrada' = antigo 'item_vendido'
+    itemDescription?: string; // Para entradas (antigo item_vendido)
+    lateFee?: number;
     createdAt: string;
 }
 
@@ -40,6 +45,7 @@ export interface Attendance {
     studentName: string;
     date: string;
     createdAt: string;
+    attendanceType?: 'normal' | 'personal'; // Tipo de presença (default: 'normal')
 }
 
 export interface Expense {
@@ -68,12 +74,23 @@ export interface Plan {
     durationMonths?: number;
 }
 
+// Novo tipo para planos Personal
+export interface PersonalPlan {
+    id: string;
+    name: string;
+    price: number;
+    totalClasses: number; // 4, 8, 12 ou 16 aulas
+    frequencyPerWeek: number; // 1, 2, 3 ou 99 (livre)
+}
+
 export interface AppData {
     students: Student[];
     payments: Payment[];
     attendance: Attendance[];
     expenses: Expense[];
     dailyNotes: DailyNote[];
+    plans?: Plan[]; // Added for backup
+    personalPlans?: PersonalPlan[]; // Added for backup
     darkMode: boolean;
     version: number;
     lastModified: string;

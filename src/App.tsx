@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import {
     LayoutDashboard, Users, UserCheck, DollarSign,
-    Settings, Moon, Sun, Menu, X
+    Settings, Moon, Sun, Menu, X, Dumbbell
 } from 'lucide-react';
 
 // Services & Hooks
@@ -16,6 +16,7 @@ import { AttendanceManager } from './components/attendance/AttendanceManager';
 import { ExpenseList } from './components/financial/ExpenseList';
 import { Settings as SettingsPage } from './components/settings/Settings';
 import { LoginPage } from './components/auth/LoginPage';
+import { PersonalDashboard } from './components/students/PersonalDashboard';
 
 
 function App() {
@@ -83,6 +84,7 @@ function App() {
         switch (activeTab) {
             case 'dashboard': return <Dashboard />;
             case 'students': return <StudentList />;
+            case 'personal-dashboard': return <PersonalDashboard />;
             case 'payments': return <PaymentList />;
             case 'attendance': return <AttendanceManager />;
             case 'financial': return <ExpenseList />;
@@ -123,6 +125,7 @@ function App() {
                 <nav className="sidebar-nav">
                     <NavItem id="dashboard" icon={LayoutDashboard} label="Dashboard" />
                     <NavItem id="students" icon={Users} label="Alunos" />
+                    <NavItem id="personal-dashboard" icon={Dumbbell} label="Controle Personal" />
                     <NavItem id="attendance" icon={UserCheck} label="Presenças" />
                     <NavItem id="payments" icon={DollarSign} label="Pagamentos" />
                     <NavItem id="financial" icon={DollarSign} label="Despesas" />

@@ -3,6 +3,7 @@ import { Download, Upload, Trash2, ShieldCheck, Info } from 'lucide-react';
 import { db } from '../../services/db';
 import { AppData } from '../../types';
 import { PlanManager } from './PlanManager';
+import { PersonalPlanManager } from './PersonalPlanManager';
 
 export function Settings() {
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -14,7 +15,9 @@ export function Settings() {
             const attendance = await db.attendance.toArray();
             const expenses = await db.expenses.toArray();
             const dailyNotes = await db.dailyNotes.toArray();
-            const settingsPairs = await db.settings.toArray(); // returns {key, value}[]
+            const plans = await db.plans.toArray();
+            const personalPlans = await db.personalPlans.toArray();
+            const settingsPairs = await db.settings.toArray();
 
             const backupData: AppData = {
                 students,
@@ -22,6 +25,8 @@ export function Settings() {
                 attendance,
                 expenses,
                 dailyNotes,
+                plans,
+                personalPlans,
                 lastBackup: new Date().toISOString(),
                 darkMode: settingsPairs.find(s => s.key === 'darkMode')?.value || false,
                 version: 2,
@@ -40,7 +45,6 @@ export function Settings() {
             link.click();
             document.body.removeChild(link);
 
-            // Update lastBackup in DB could be good but not critical
             alert('Backup exportado com sucesso! Guarde este arquivo em local seguro.');
         } catch (error) {
             console.error(error);
@@ -72,7 +76,7 @@ export function Settings() {
             reader.onload = async (event) => {
                 try {
                     const json = event.target?.result as string;
-                    
+
                     // Validação básica de JSON
                     if (!json || json.trim().length === 0) {
                         throw new Error('Arquivo vazio ou inválido');
@@ -98,68 +102,42 @@ export function Settings() {
                         }
                     }
 
-                    // Validação de tipos básicos e sanitização
-                    const sanitizeStudents = (students: any[]) => {
-                        return students.filter(s => {
-                            return s && 
-                                   typeof s.id === 'string' && 
-                                   typeof s.name === 'string' &&
-                                   typeof s.phone === 'string';
-                        }).map(s => ({
-                            ...s,
-                            id: String(s.id),
-                            name: String(s.name).substring(0, 200), // Limitar tamanho
-                            phone: String(s.phone).substring(0, 20)
-                        }));
-                    };
+                    // Sanitização básica dos dados importados
 
-                    const sanitizePayments = (payments: any[]) => {
-                        return payments.filter(p => {
-                            return p && 
-                                   typeof p.id === 'string' && 
-                                   typeof p.amount === 'number' &&
-                                   p.amount >= 0;
-                        }).map(p => ({
-                            ...p,
-                            id: String(p.id),
-                            amount: Math.max(0, Number(p.amount)),
-                            type: p.type || 'pagamento' // Default para backward compatibility
-                        }));
-                    };
-
-                    // Sanitizar dados
                     const sanitizedData: AppData = {
-                        students: sanitizeStudents(data.students || []),
-                        payments: sanitizePayments(data.payments || []),
-                        attendance: (data.attendance || []).filter(a => a && typeof a.id === 'string'),
-                        expenses: (data.expenses || []).filter(e => e && typeof e.id === 'string'),
-                        dailyNotes: (data.dailyNotes || []).filter(n => n && typeof n.id === 'string'),
+                        students: data.students || [],
+                        payments: data.payments || [],
+                        attendance: data.attendance || [],
+                        expenses: data.expenses || [],
+                        dailyNotes: data.dailyNotes || [],
+                        plans: data.plans || [],
+                        personalPlans: data.personalPlans || [],
                         darkMode: Boolean(data.darkMode),
                         version: Number(data.version) || 1,
                         lastModified: data.lastModified || new Date().toISOString(),
                         lastBackup: data.lastBackup
                     };
 
-                    await db.transaction('rw', [db.students, db.payments, db.attendance, db.expenses, db.dailyNotes], async () => {
-                        // Bulk put (upsert)
+                    await db.transaction('rw', [db.students, db.payments, db.attendance, db.expenses, db.dailyNotes, db.plans, db.personalPlans], async () => {
                         if (sanitizedData.students.length > 0) await db.students.bulkPut(sanitizedData.students);
                         if (sanitizedData.payments.length > 0) await db.payments.bulkPut(sanitizedData.payments);
                         if (sanitizedData.attendance.length > 0) await db.attendance.bulkPut(sanitizedData.attendance);
                         if (sanitizedData.expenses.length > 0) await db.expenses.bulkPut(sanitizedData.expenses);
                         if (sanitizedData.dailyNotes.length > 0) await db.dailyNotes.bulkPut(sanitizedData.dailyNotes);
+                        if (sanitizedData.plans && sanitizedData.plans.length > 0) await db.plans.bulkPut(sanitizedData.plans);
+                        if (sanitizedData.personalPlans && sanitizedData.personalPlans.length > 0) await db.personalPlans.bulkPut(sanitizedData.personalPlans);
                     });
 
                     alert('Dados importados com sucesso! A página será recarregada.');
                     window.location.reload();
                 } catch (error: any) {
                     console.error(error);
-                    alert(`Erro ao importar arquivo: ${error.message || 'Arquivo inválido ou corrompido'}\n\nVerifique se é um backup válido exportado por este sistema.`);
+                    alert(`Erro ao importar arquivo: ${error.message || 'Erro desconhecido'}`);
                 }
             };
             reader.readAsText(file);
         }
 
-        // Reset input
         e.target.value = '';
     };
 
@@ -192,7 +170,7 @@ export function Settings() {
                             Faça backups regulares dos seus dados. O arquivo baixado contém todos os alunos, pagamentos e histórico.
                         </p>
                         <div className="p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg text-yellow-800 dark:text-yellow-300 text-xs">
-                            <strong>⚠️ Segurança:</strong> Apenas importe backups que você mesmo exportou. Arquivos maliciosos podem comprometer seus dados.
+                            <strong>⚠️ Segurança:</strong> Apenas importe backups que você mesmo exportou.
                         </div>
 
                         <div className="flex flex-col gap-3">
@@ -232,31 +210,26 @@ export function Settings() {
                                 <Info size={16} /> Onde estão meus dados?
                             </h4>
                             <p>
-                                Seus dados estão salvos <strong>SOMENTE no seu dispositivo</strong> (neste navegador).
-                            </p>
-                            <p className="mt-2">
-                                Mesmo se você acessar este site pelo link da Vercel,
-                                <strong> NADA é enviado para a internet.</strong>
-                                O sistema funciona 100% offline e local.
+                                Seus dados estão salvos <strong>SOMENTE no seu dispositivo</strong>. O sistema funciona offline.
                             </p>
                         </div>
                     </div>
                 </div>
 
-                {/* Plan Manager */}
-                <PlanManager />
+                {/* Plan Managers */}
+                <div className="md:col-span-2 grid md:grid-cols-2 gap-6">
+                    <PlanManager />
+                    <PersonalPlanManager />
+                </div>
 
                 {/* Danger Zone */}
-                <div className="card border-red-200">
+                <div className="card border-red-200 md:col-span-2">
                     <div className="card-header bg-red-50 border-red-100">
                         <h3 className="flex items-center gap-2 font-bold text-red-700">
                             <Trash2 size={20} /> Zona de Perigo
                         </h3>
                     </div>
                     <div className="card-body">
-                        <p className="text-sm text-gray-600 mb-4">
-                            Apagar todos os dados do sistema. Use isso apenas se quiser começar do zero.
-                        </p>
                         <button onClick={handleReset} className="btn btn-danger w-full justify-center">
                             Resetar Fábrica (Apagar Tudo)
                         </button>

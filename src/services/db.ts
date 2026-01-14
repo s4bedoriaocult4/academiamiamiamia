@@ -1,5 +1,5 @@
 import Dexie, { EntityTable } from 'dexie';
-import { Student, Payment, Attendance, Expense, DailyNote, Plan } from '../types';
+import { Student, Payment, Attendance, Expense, DailyNote, Plan, PersonalPlan } from '../types';
 import { loadData } from './storage';
 
 // Define default plans
@@ -11,6 +11,14 @@ const DEFAULT_PLANS: Plan[] = [
     { id: 'plus', name: 'Plus (até 2 treinos/dia)', price: 200, frequency: 999, durationMonths: 1 }
 ];
 
+// Define default personal plans
+const DEFAULT_PERSONAL_PLANS: PersonalPlan[] = [
+    { id: 'p1x', name: 'Personal 1x/semana', price: 240, totalClasses: 4, frequencyPerWeek: 1 },
+    { id: 'p2x', name: 'Personal 2x/semana', price: 440, totalClasses: 8, frequencyPerWeek: 2 },
+    { id: 'p3x', name: 'Personal 3x/semana', price: 600, totalClasses: 12, frequencyPerWeek: 3 },
+    { id: 'plivre', name: 'Personal Livre', price: 720, totalClasses: 16, frequencyPerWeek: 99 }
+];
+
 // Define an interface for the database structure if using EntityTable
 interface GymDatabaseInfo extends Dexie {
     students: EntityTable<Student, 'id'>;
@@ -19,7 +27,8 @@ interface GymDatabaseInfo extends Dexie {
     expenses: EntityTable<Expense, 'id'>;
     dailyNotes: EntityTable<DailyNote, 'id'>;
     settings: EntityTable<{ key: string; value: any }, 'key'>;
-    plans: EntityTable<Plan, 'id'>; // New Table
+    plans: EntityTable<Plan, 'id'>;
+    personalPlans: EntityTable<PersonalPlan, 'id'>;
 }
 
 class GymDatabase extends Dexie implements GymDatabaseInfo {
@@ -30,14 +39,27 @@ class GymDatabase extends Dexie implements GymDatabaseInfo {
     dailyNotes!: EntityTable<DailyNote, 'id'>;
     settings!: EntityTable<{ key: string; value: any }, 'key'>;
     plans!: EntityTable<Plan, 'id'>;
+    personalPlans!: EntityTable<PersonalPlan, 'id'>;
 
     constructor() {
         super('GymDatabase');
 
+        // Versão 5: Adicionando suporte a planos Personal
+        this.version(5).stores({
+            students: 'id, name, status, plan, nextDue, responsibleName, cpf, cep, planType, personalPlanId',
+            payments: 'id, studentId, date, referenceMonth, type',
+            attendance: 'id, studentId, date, attendanceType',
+            expenses: 'id, date, category',
+            dailyNotes: 'id, date',
+            settings: 'key',
+            plans: 'id, name',
+            personalPlans: 'id, name'
+        });
+
         // Versão 4: Adicionando campos CPF, CEP, address e suporte a itens vendidos
         this.version(4).stores({
-            students: 'id, name, status, plan, nextDue, responsibleName, cpf, cep', // Added cpf and cep indexes
-            payments: 'id, studentId, date, referenceMonth, type', // Added type index
+            students: 'id, name, status, plan, nextDue, responsibleName, cpf, cep',
+            payments: 'id, studentId, date, referenceMonth, type',
             attendance: 'id, studentId, date',
             expenses: 'id, date, category',
             dailyNotes: 'id, date',
@@ -47,13 +69,13 @@ class GymDatabase extends Dexie implements GymDatabaseInfo {
 
         // Versão 3: Adicionando tabela de planos
         this.version(3).stores({
-            students: 'id, name, status, plan, nextDue, responsibleName', // Added responsibleName index
+            students: 'id, name, status, plan, nextDue, responsibleName',
             payments: 'id, studentId, date, referenceMonth',
             attendance: 'id, studentId, date',
             expenses: 'id, date, category',
             dailyNotes: 'id, date',
             settings: 'key',
-            plans: 'id, name' // New store
+            plans: 'id, name'
         });
 
         this.version(2).stores({
@@ -76,10 +98,47 @@ class GymDatabase extends Dexie implements GymDatabaseInfo {
 
         // Initialize default plans if empty
         this.on('ready', async () => {
-            const count = await this.plans.count();
-            if (count === 0) {
+            const planCount = await this.plans.count();
+            if (planCount === 0) {
                 await this.plans.bulkAdd(DEFAULT_PLANS);
                 console.log('Default plans populated');
+            }
+
+            // Initialize default personal plans if empty
+            const personalPlanCount = await this.personalPlans.count();
+            if (personalPlanCount === 0) {
+                await this.personalPlans.bulkAdd(DEFAULT_PERSONAL_PLANS);
+                console.log('Default personal plans populated');
+            }
+
+            // Retroactive Data Integrity Check
+            // Ensure all students have a valid 'planType' (migration from v4 -> v5 behavior)
+            // This is efficient enough to run on ready if we just check for missing fields or do a one-time check based on a setting flag.
+            const integrityCheckDone = await this.settings.get('v5_integrity_check');
+            if (!integrityCheckDone) {
+                console.log('Running v5 Data Integrity Check...');
+                const students = await this.students.toArray();
+                const updates: { key: string; changes: { planType: string } }[] = [];
+
+                for (const student of students) {
+                    if (!student.planType) {
+                        updates.push({
+                            key: student.id,
+                            changes: { planType: 'normal' }
+                        });
+                    }
+                }
+
+                if (updates.length > 0) {
+                    await this.transaction('rw', this.students, async () => {
+                        for (const update of updates) {
+                            await this.students.update(update.key, update.changes as any);
+                        }
+                    });
+                    console.log(`Updated ${updates.length} students with default planType='normal'`);
+                }
+
+                await this.settings.put({ key: 'v5_integrity_check', value: true });
             }
         });
     }

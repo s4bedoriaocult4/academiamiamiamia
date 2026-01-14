@@ -1,5 +1,6 @@
+import { useState, useEffect } from 'react';
 import {
-    Users, DollarSign, Clock, AlertCircle, Printer, Cake
+    Users, DollarSign, Clock, AlertCircle, Printer, Cake, ChevronDown, ChevronUp
 } from 'lucide-react';
 import {
     BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -17,6 +18,18 @@ export function Dashboard() {
     const expenses = useExpenses();
     const attendance = useAttendance();
     const plans = useLiveQuery(() => db.plans.toArray()) || [];
+
+    // Estado para minimizar aniversariantes
+    const [birthdaysCollapsed, setBirthdaysCollapsed] = useState(() => {
+        // Carregar preferência do localStorage
+        const saved = localStorage.getItem('birthdaysCollapsed');
+        return saved === 'true';
+    });
+
+    // Salvar preferência quando mudar
+    useEffect(() => {
+        localStorage.setItem('birthdaysCollapsed', String(birthdaysCollapsed));
+    }, [birthdaysCollapsed]);
 
     // Computed Values
     const activeStudents = students.filter(s => s.status === 'ativo');
@@ -124,39 +137,55 @@ export function Dashboard() {
                 </button>
             </div>
 
-            {/* Aniversariantes do Mês - Movido para o topo */}
+            {/* Aniversariantes do Mês - Com opção de minimizar */}
             {birthdayStudents.length > 0 && (
                 <div className={`alert ${todayBirthdays.length > 0 ? 'alert-warning' : 'alert-info'} mb-6`}>
                     <Cake size={20} />
-                    <div className="alert-content">
-                        <p className="alert-title">
-                            🎂 Aniversariantes do Mês {todayBirthdays.length > 0 && ' - Hoje é aniversário!'}
-                        </p>
-                        <div className="mt-2 space-y-2">
-                            {birthdayStudents.map(s => {
-                                if (!s.birthDate) return null;
-                                const birth = new Date(s.birthDate);
-                                const isToday = birth.getMonth() === currentMonth && birth.getDate() === today.getDate();
-                                const day = birth.getDate();
-                                return (
-                                    <div 
-                                        key={s.id} 
-                                        className={`flex justify-between text-sm py-1 border-b ${isToday ? 'border-yellow-300 font-bold text-yellow-800' : 'border-blue-200'} last:border-0`}
-                                        style={{ 
-                                            display: 'flex', 
-                                            justifyContent: 'space-between', 
-                                            padding: '0.5rem 0',
-                                            fontWeight: isToday ? 'bold' : 'normal'
-                                        }}
-                                    >
-                                        <span>{s.name} {isToday && '🎉'}</span>
-                                        <span className="font-bold">
-                                            Dia {day}
-                                        </span>
-                                    </div>
-                                );
-                            })}
+                    <div className="alert-content" style={{ flex: 1 }}>
+                        <div
+                            className="alert-title flex justify-between items-center cursor-pointer"
+                            onClick={() => setBirthdaysCollapsed(!birthdaysCollapsed)}
+                            style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }}
+                        >
+                            <span>
+                                🎂 Aniversariantes do Mês ({birthdayStudents.length})
+                                {todayBirthdays.length > 0 && ' - Hoje é aniversário!'}
+                            </span>
+                            <button
+                                className="btn btn-sm"
+                                style={{ padding: '0.25rem', background: 'transparent', border: 'none' }}
+                                title={birthdaysCollapsed ? 'Expandir' : 'Minimizar'}
+                            >
+                                {birthdaysCollapsed ? <ChevronDown size={18} /> : <ChevronUp size={18} />}
+                            </button>
                         </div>
+                        {!birthdaysCollapsed && (
+                            <div className="mt-2 space-y-2">
+                                {birthdayStudents.map(s => {
+                                    if (!s.birthDate) return null;
+                                    const birth = new Date(s.birthDate);
+                                    const isToday = birth.getMonth() === currentMonth && birth.getDate() === today.getDate();
+                                    const day = birth.getDate();
+                                    return (
+                                        <div
+                                            key={s.id}
+                                            className={`flex justify-between text-sm py-1 border-b ${isToday ? 'border-yellow-300 font-bold text-yellow-800' : 'border-blue-200'} last:border-0`}
+                                            style={{
+                                                display: 'flex',
+                                                justifyContent: 'space-between',
+                                                padding: '0.5rem 0',
+                                                fontWeight: isToday ? 'bold' : 'normal'
+                                            }}
+                                        >
+                                            <span>{s.name} {isToday && '🎉'}</span>
+                                            <span className="font-bold">
+                                                Dia {day}
+                                            </span>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
                     </div>
                 </div>
             )}

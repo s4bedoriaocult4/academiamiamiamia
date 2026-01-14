@@ -11,24 +11,53 @@ interface StudentModalProps {
 }
 
 export function StudentModal({ isOpen, onClose, studentToEdit }: StudentModalProps) {
-    const [formData, setFormData] = useState<Partial<Student>>({
-        name: '', phone: '', email: '', cpf: '', cep: '', address: '', plan: '1x', dueDay: 5,
-        startDate: new Date().toISOString().split('T')[0], graduation: 'Sem graduação', notes: '', status: 'ativo'
+    // Fetch Plans dynamically - mover para cima para poder usar no defaultFormData
+    const plans = useLiveQuery(() => db.plans.toArray()) || [];
+
+    // Default values para novos alunos
+    const getDefaultFormData = (): Partial<Student> => ({
+        name: '',
+        phone: '',
+        email: '',
+        cpf: '',
+        cep: '',
+        address: '',
+        birthDate: '',
+        responsibleName: '',
+        plan: plans.length > 0 ? plans[0].id : '1x',
+        planType: 'normal',
+        dueDay: 5,
+        startDate: new Date().toISOString().split('T')[0],
+        nextDue: '',
+        personalClassesRemaining: 0,
+        graduation: 'Sem graduação',
+        notes: '',
+        status: 'ativo'
     });
 
-    // Fetch Plans dynamically
-    const plans = useLiveQuery(() => db.plans.toArray()) || [];
+    const [formData, setFormData] = useState<Partial<Student>>(getDefaultFormData());
 
     useEffect(() => {
         if (studentToEdit) {
-            setFormData(studentToEdit);
-        } else {
+            // Carregar TODOS os campos do aluno, usando defaults para campos undefined
+            const defaults = getDefaultFormData();
             setFormData({
-                name: '', phone: '', email: '', cpf: '', cep: '', address: '', plan: '1x', dueDay: 5,
-                startDate: new Date().toISOString().split('T')[0], graduation: 'Sem graduação', notes: '', status: 'ativo'
+                ...defaults,
+                ...studentToEdit,
+                // Garantir valores não-undefined para campos críticos
+                email: studentToEdit.email || '',
+                cpf: studentToEdit.cpf || '',
+                cep: studentToEdit.cep || '',
+                address: studentToEdit.address || '',
+                birthDate: studentToEdit.birthDate || '',
+                responsibleName: studentToEdit.responsibleName || '',
+                notes: studentToEdit.notes || '',
+                personalClassesRemaining: studentToEdit.personalClassesRemaining || 0
             });
+        } else {
+            setFormData(getDefaultFormData());
         }
-    }, [studentToEdit, isOpen]);
+    }, [studentToEdit, isOpen, plans]);
 
     const getNextDueDate = (baseDate: string, dueDay: number): string => {
         const base = new Date(baseDate + 'T12:00:00');
@@ -51,6 +80,17 @@ export function StudentModal({ isOpen, onClose, studentToEdit }: StudentModalPro
         }
 
         try {
+            const cleanData = { ...formData };
+
+            // Force planType to 'both' if they have both monthly plan and personal credits? 
+            // Or just 'normal' and treat personal as an addon?
+            // Let's keep 'normal' as default and 'both' if they have > 0 credits, purely for badges in list.
+            if ((cleanData.personalClassesRemaining || 0) > 0) {
+                cleanData.planType = 'both';
+            } else {
+                cleanData.planType = 'normal';
+            }
+
             if (studentToEdit) {
                 // Edit Logic
                 let nextDue = formData.nextDue;
@@ -59,22 +99,15 @@ export function StudentModal({ isOpen, onClose, studentToEdit }: StudentModalPro
                 }
 
                 await db.students.update(studentToEdit.id, {
-                    ...formData,
+                    ...cleanData,
                     dueDay: Number(formData.dueDay),
                     nextDue
                 });
 
-                // UPDATE CASCADE: Update name in other tables if it changed
+                // UPDATE CASCADE
                 if (studentToEdit.name !== formData.name) {
-                    // Update Payments
-                    await db.payments
-                        .where('studentId').equals(studentToEdit.id)
-                        .modify({ studentName: formData.name });
-
-                    // Update Attendance
-                    await db.attendance
-                        .where('studentId').equals(studentToEdit.id)
-                        .modify({ studentName: formData.name });
+                    await db.payments.where('studentId').equals(studentToEdit.id).modify({ studentName: formData.name });
+                    await db.attendance.where('studentId').equals(studentToEdit.id).modify({ studentName: formData.name });
                 }
 
             } else {
@@ -90,7 +123,15 @@ export function StudentModal({ isOpen, onClose, studentToEdit }: StudentModalPro
                     address: formData.address,
                     birthDate: formData.birthDate,
                     responsibleName: formData.responsibleName,
+
                     plan: formData.plan || '1x',
+                    planType: cleanData.planType as any,
+
+                    // Personal fields
+                    personalPlanId: undefined, // Deprecated in favor of generic balance, but kept in type if needed
+                    personalClassesRemaining: Number(formData.personalClassesRemaining),
+                    personalStartDate: undefined, // Transaction based now
+
                     dueDay: Number(formData.dueDay),
                     startDate: formData.startDate!,
                     nextDue: nextDue,
@@ -156,8 +197,7 @@ export function StudentModal({ isOpen, onClose, studentToEdit }: StudentModalPro
     const handleCEPChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const formatted = formatCEP(e.target.value);
         setFormData({ ...formData, cep: formatted });
-        
-        // Tentar buscar endereço via ViaCEP se CEP completo
+
         if (formatted.replace(/\D/g, '').length === 8) {
             try {
                 const response = await fetch(`https://viacep.com.br/ws/${formatted.replace(/\D/g, '')}/json/`);
@@ -167,7 +207,7 @@ export function StudentModal({ isOpen, onClose, studentToEdit }: StudentModalPro
                     setFormData(prev => ({ ...prev, cep: formatted, address: address }));
                 }
             } catch (error) {
-                // Silenciosamente falha se API não disponível
+                // Silently fail
             }
         }
     };
@@ -188,14 +228,49 @@ export function StudentModal({ isOpen, onClose, studentToEdit }: StudentModalPro
     const age = getAge(formData.birthDate);
     const isMinor = age > 0 && age < 18;
 
+    // Verificar se há dados não salvos
+    const hasUnsavedChanges = (): boolean => {
+        // Para novo aluno, verificar se preencheu algo
+        if (!studentToEdit) {
+            return !!(formData.name || formData.phone || formData.email || formData.cpf || formData.cep || formData.address || formData.birthDate || formData.responsibleName || formData.notes);
+        }
+        // Para edição, comparar com dados originais
+        return (
+            formData.name !== studentToEdit.name ||
+            formData.phone !== studentToEdit.phone ||
+            formData.email !== (studentToEdit.email || '') ||
+            formData.cpf !== (studentToEdit.cpf || '') ||
+            formData.cep !== (studentToEdit.cep || '') ||
+            formData.address !== (studentToEdit.address || '') ||
+            formData.birthDate !== (studentToEdit.birthDate || '') ||
+            formData.responsibleName !== (studentToEdit.responsibleName || '') ||
+            formData.plan !== studentToEdit.plan ||
+            formData.dueDay !== studentToEdit.dueDay ||
+            formData.graduation !== studentToEdit.graduation ||
+            formData.notes !== (studentToEdit.notes || '') ||
+            formData.status !== studentToEdit.status ||
+            formData.personalClassesRemaining !== (studentToEdit.personalClassesRemaining || 0)
+        );
+    };
+
+    const handleClose = () => {
+        if (hasUnsavedChanges()) {
+            if (confirm('Você tem dados não salvos. Deseja realmente sair?')) {
+                onClose();
+            }
+        } else {
+            onClose();
+        }
+    };
+
     if (!isOpen) return null;
 
     return (
-        <div className="modal-overlay" onClick={onClose}>
+        <div className="modal-overlay" onClick={handleClose}>
             <div className="modal" onClick={e => e.stopPropagation()}>
                 <div className="modal-header">
                     <h3>{studentToEdit ? '✏️ Editar Aluno' : '➕ Novo Aluno'}</h3>
-                    <button onClick={onClose} className="action-btn"><X size={20} /></button>
+                    <button onClick={handleClose} className="action-btn"><X size={20} /></button>
                 </div>
                 <form onSubmit={handleSubmit} className="modal-body">
                     <div className="form-group">
@@ -276,7 +351,6 @@ export function StudentModal({ isOpen, onClose, studentToEdit }: StudentModalPro
                         />
                     </div>
 
-                    {/* Responsible Name - Highlight if Minor */}
                     <div className="form-group">
                         <label className="form-label flex justify-between">
                             Nome do Responsável
@@ -291,28 +365,49 @@ export function StudentModal({ isOpen, onClose, studentToEdit }: StudentModalPro
                         />
                     </div>
 
-                    <div className="grid grid-cols-2 gap-4" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                        <div className="form-group">
-                            <label className="form-label">Plano</label>
-                            <select
-                                className="form-select"
-                                value={formData.plan}
-                                onChange={e => setFormData({ ...formData, plan: e.target.value })}
-                            >
-                                {plans.map(p => <option key={p.id} value={p.id}>{p.name} - R$ {p.price}</option>)}
-                            </select>
+                    {/* PLAN SELECTION SECTION - SIMPLIFIED */}
+                    <div className="p-4 bg-blue-50/50 rounded-lg border border-blue-100 mb-4 space-y-4">
+                        <h4 className="font-bold text-sm uppercase text-gray-700">Plano Mensal & Aulas</h4>
+
+                        <div className="grid grid-cols-2 gap-4" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                            <div className="form-group">
+                                <label className="form-label">Plano Mensal</label>
+                                <select
+                                    className="form-select"
+                                    value={formData.plan}
+                                    onChange={e => setFormData({ ...formData, plan: e.target.value })}
+                                >
+                                    {plans.map(p => <option key={p.id} value={p.id}>{p.name} - R$ {p.price}</option>)}
+                                </select>
+                            </div>
+                            <div className="form-group">
+                                <label className="form-label">Vencimento</label>
+                                <select
+                                    className="form-select"
+                                    value={formData.dueDay}
+                                    onChange={e => setFormData({ ...formData, dueDay: Number(e.target.value) })}
+                                >
+                                    {DUE_OPTIONS.map(d => <option key={d} value={d}>Dia {d}</option>)}
+                                </select>
+                            </div>
                         </div>
+
                         <div className="form-group">
-                            <label className="form-label">Vencimento</label>
-                            <select
-                                className="form-select"
-                                value={formData.dueDay}
-                                onChange={e => setFormData({ ...formData, dueDay: Number(e.target.value) })}
-                            >
-                                {DUE_OPTIONS.map(d => <option key={d} value={d}>Dia {d}</option>)}
-                            </select>
+                            <label className="form-label">Saldo de Aulas Personal</label>
+                            <div className="flex gap-2 items-center">
+                                <input
+                                    type="number"
+                                    className="form-input bg-white"
+                                    value={formData.personalClassesRemaining}
+                                    onChange={e => setFormData({ ...formData, personalClassesRemaining: Number(e.target.value) })}
+                                />
+                                <span className="text-xs text-gray-500 w-full">
+                                    Utilize a tela de Pagamentos para vender pacotes. Aqui você ajusta o saldo manualmente.
+                                </span>
+                            </div>
                         </div>
                     </div>
+
 
                     <div className="grid grid-cols-2 gap-4" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
                         <div className="form-group">
