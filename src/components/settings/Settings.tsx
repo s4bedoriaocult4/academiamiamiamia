@@ -17,6 +17,7 @@ export function Settings() {
             const dailyNotes = await db.dailyNotes.toArray();
             const plans = await db.plans.toArray();
             const personalPlans = await db.personalPlans.toArray();
+            const monthlySnapshots = await db.monthlySnapshots.toArray();
             const settingsPairs = await db.settings.toArray();
 
             const backupData: AppData = {
@@ -27,6 +28,7 @@ export function Settings() {
                 dailyNotes,
                 plans,
                 personalPlans,
+                monthlySnapshots,
                 lastBackup: new Date().toISOString(),
                 darkMode: settingsPairs.find(s => s.key === 'darkMode')?.value || false,
                 version: 2,
@@ -112,13 +114,14 @@ export function Settings() {
                         dailyNotes: data.dailyNotes || [],
                         plans: data.plans || [],
                         personalPlans: data.personalPlans || [],
+                        monthlySnapshots: data.monthlySnapshots || [],
                         darkMode: Boolean(data.darkMode),
                         version: Number(data.version) || 1,
                         lastModified: data.lastModified || new Date().toISOString(),
                         lastBackup: data.lastBackup
                     };
 
-                    await db.transaction('rw', [db.students, db.payments, db.attendance, db.expenses, db.dailyNotes, db.plans, db.personalPlans], async () => {
+                    await db.transaction('rw', [db.students, db.payments, db.attendance, db.expenses, db.dailyNotes, db.plans, db.personalPlans, db.monthlySnapshots], async () => {
                         if (sanitizedData.students.length > 0) await db.students.bulkPut(sanitizedData.students);
                         if (sanitizedData.payments.length > 0) await db.payments.bulkPut(sanitizedData.payments);
                         if (sanitizedData.attendance.length > 0) await db.attendance.bulkPut(sanitizedData.attendance);
@@ -126,6 +129,7 @@ export function Settings() {
                         if (sanitizedData.dailyNotes.length > 0) await db.dailyNotes.bulkPut(sanitizedData.dailyNotes);
                         if (sanitizedData.plans && sanitizedData.plans.length > 0) await db.plans.bulkPut(sanitizedData.plans);
                         if (sanitizedData.personalPlans && sanitizedData.personalPlans.length > 0) await db.personalPlans.bulkPut(sanitizedData.personalPlans);
+                        if (sanitizedData.monthlySnapshots && sanitizedData.monthlySnapshots.length > 0) await db.monthlySnapshots.bulkPut(sanitizedData.monthlySnapshots);
                     });
 
                     alert('Dados importados com sucesso! A página será recarregada.');

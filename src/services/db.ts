@@ -1,5 +1,5 @@
 import Dexie, { EntityTable } from 'dexie';
-import { Student, Payment, Attendance, Expense, DailyNote, Plan, PersonalPlan } from '../types';
+import { Student, Payment, Attendance, Expense, DailyNote, Plan, PersonalPlan, MonthlySnapshot } from '../types';
 import { loadData } from './storage';
 
 // Define default plans
@@ -29,6 +29,7 @@ interface GymDatabaseInfo extends Dexie {
     settings: EntityTable<{ key: string; value: any }, 'key'>;
     plans: EntityTable<Plan, 'id'>;
     personalPlans: EntityTable<PersonalPlan, 'id'>;
+    monthlySnapshots: EntityTable<MonthlySnapshot, 'id'>;
 }
 
 class GymDatabase extends Dexie implements GymDatabaseInfo {
@@ -40,9 +41,23 @@ class GymDatabase extends Dexie implements GymDatabaseInfo {
     settings!: EntityTable<{ key: string; value: any }, 'key'>;
     plans!: EntityTable<Plan, 'id'>;
     personalPlans!: EntityTable<PersonalPlan, 'id'>;
+    monthlySnapshots!: EntityTable<MonthlySnapshot, 'id'>;
 
     constructor() {
         super('GymDatabase');
+
+        // Versão 6: Adicionando suporte a histórico mensal (monthlySnapshots)
+        this.version(6).stores({
+            students: 'id, name, status, plan, nextDue, responsibleName, cpf, cep, planType, personalPlanId',
+            payments: 'id, studentId, date, referenceMonth, type',
+            attendance: 'id, studentId, date, attendanceType',
+            expenses: 'id, date, category',
+            dailyNotes: 'id, date',
+            settings: 'key',
+            plans: 'id, name',
+            personalPlans: 'id, name',
+            monthlySnapshots: 'id, year, month'
+        });
 
         // Versão 5: Adicionando suporte a planos Personal
         this.version(5).stores({

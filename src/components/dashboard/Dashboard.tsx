@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import {
-    Users, DollarSign, Clock, AlertCircle, Printer, Cake, ChevronDown, ChevronUp
+    Users, DollarSign, Clock, AlertCircle, Printer, Cake, ChevronDown, ChevronUp, History, Calendar
 } from 'lucide-react';
 import {
     BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -9,6 +9,8 @@ import {
 import { useStudents, usePayments, useExpenses, useAttendance } from '../../hooks/useGymStore';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../../services/db';
+import { checkAndCloseMonth, getMonthHistory, getMonthName, generateMissingSnapshots } from '../../services/MonthlyHistoryService';
+import { MonthlySnapshot } from '../../types';
 
 const CHART_COLORS = ['#1e40af', '#3b82f6', '#60a5fa', '#93c5fd', '#bfdbfe'];
 
@@ -30,6 +32,55 @@ export function Dashboard() {
     useEffect(() => {
         localStorage.setItem('birthdaysCollapsed', String(birthdaysCollapsed));
     }, [birthdaysCollapsed]);
+
+    // Estado para histórico mensal
+    const [monthlyHistory, setMonthlyHistory] = useState<MonthlySnapshot[]>([]);
+    const [historyCollapsed, setHistoryCollapsed] = useState(true);
+    const [monthClosed, setMonthClosed] = useState(false);
+
+    // Estado para seleção de mês (dropdown)
+    // 'current' = mês atual (dados dinâmicos), ou ID do snapshot (ex: '2026-01')
+    const [selectedMonth, setSelectedMonth] = useState<string>('current');
+    const [selectedSnapshot, setSelectedSnapshot] = useState<MonthlySnapshot | null>(null);
+
+    // Verificar virada de mês ao carregar o Dashboard
+    useEffect(() => {
+        const initMonthlyCheck = async () => {
+            try {
+                // 1. Tentar fechar mês anterior automaticamente
+                const wasClosed = await checkAndCloseMonth();
+
+                // 2. Gerar snapshots retroativos se faltarem (ex: implementação nova em fevereiro gera janeiro)
+                const generatedRetroactive = await generateMissingSnapshots();
+
+                if (wasClosed || generatedRetroactive > 0) {
+                    setMonthClosed(true);
+                    // Esconder mensagem após 5 segundos
+                    setTimeout(() => setMonthClosed(false), 5000);
+                }
+
+                // 3. Carregar histórico atualizado
+                const history = await getMonthHistory();
+                setMonthlyHistory(history);
+            } catch (error) {
+                console.error('Erro ao verificar histórico mensal:', error);
+            }
+        };
+        initMonthlyCheck();
+    }, []);
+
+    // Sincronizar snapshot selecionado quando muda o mês
+    useEffect(() => {
+        if (selectedMonth === 'current') {
+            setSelectedSnapshot(null);
+        } else {
+            const snapshot = monthlyHistory.find(s => s.id === selectedMonth);
+            setSelectedSnapshot(snapshot || null);
+        }
+    }, [selectedMonth, monthlyHistory]);
+
+    // Dados do mês visualizado (snapshot ou dados dinâmicos)
+    const viewingHistoricalMonth = selectedSnapshot !== null;
 
     // Computed Values
     const activeStudents = students.filter(s => s.status === 'ativo');
@@ -131,11 +182,54 @@ export function Dashboard() {
     return (
         <div className="space-y-6 animate-fade-in">
             <div className="flex justify-between items-center mb-4 no-print" style={{ marginBottom: '1rem' }}>
-                <h2 style={{ fontSize: '1.25rem', fontWeight: 600 }}>Visão Geral</h2>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                    <h2 style={{ fontSize: '1.25rem', fontWeight: 600 }}>Visão Geral</h2>
+                    {/* Dropdown de seleção de mês */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <Calendar size={18} style={{ color: '#6b7280' }} />
+                        <select
+                            value={selectedMonth}
+                            onChange={(e) => setSelectedMonth(e.target.value)}
+                            className="input"
+                            style={{
+                                padding: '0.5rem 1rem',
+                                borderRadius: '6px',
+                                border: '1px solid #d1d5db',
+                                minWidth: '180px',
+                                fontSize: '0.875rem',
+                                backgroundColor: viewingHistoricalMonth ? '#fef3c7' : 'white'
+                            }}
+                        >
+                            <option value="current">
+                                {getMonthName(currentMonth)} {currentYear} (Atual)
+                            </option>
+                            {monthlyHistory.map(snapshot => (
+                                <option key={snapshot.id} value={snapshot.id}>
+                                    {getMonthName(snapshot.month)} {snapshot.year} (Fechado)
+                                </option>
+                            ))}
+                        </select>
+                    </div>
+                </div>
                 <button onClick={() => window.print()} className="btn btn-outline" title="Imprimir Relatório">
                     <Printer size={18} /> Imprimir Relatório
                 </button>
             </div>
+
+            {/* Aviso de visualização histórica */}
+            {viewingHistoricalMonth && (
+                <div className="alert alert-info" style={{ background: '#fef3c7', border: '1px solid #f59e0b' }}>
+                    <History size={20} />
+                    <div className="alert-content">
+                        <p className="alert-title" style={{ color: '#92400e' }}>
+                            📅 Visualizando mês fechado: {getMonthName(selectedSnapshot!.month)} {selectedSnapshot!.year}
+                        </p>
+                        <p style={{ color: '#92400e', fontSize: '0.875rem' }}>
+                            Estes são dados consolidados do fechamento. Os cards abaixo mostram os totais salvos.
+                        </p>
+                    </div>
+                </div>
+            )}
 
             {/* Aniversariantes do Mês - Com opção de minimizar */}
             {birthdayStudents.length > 0 && (
@@ -195,8 +289,12 @@ export function Dashboard() {
                 <div className="stat-card">
                     <div className="stat-card-content">
                         <div>
-                            <p className="stat-label">Alunos Ativos</p>
-                            <p className="stat-value">{activeStudents.length}</p>
+                            <p className="stat-label">
+                                {viewingHistoricalMonth ? 'Alunos (Fechamento)' : 'Alunos Ativos'}
+                            </p>
+                            <p className="stat-value">
+                                {viewingHistoricalMonth ? selectedSnapshot!.activeStudents : activeStudents.length}
+                            </p>
                         </div>
                         <div className="stat-icon primary">
                             <Users size={24} />
@@ -208,8 +306,12 @@ export function Dashboard() {
                     <div className="stat-card-content">
                         <div>
                             <p className="stat-label">Receita do Mês</p>
-                            <p className="stat-value">R$ {thisMonthRevenue.toLocaleString('pt-BR')}</p>
-                            <p className="stat-sublabel">Esperado: R$ {expectedRevenue.toLocaleString('pt-BR')}</p>
+                            <p className="stat-value">
+                                R$ {(viewingHistoricalMonth ? selectedSnapshot!.revenue : thisMonthRevenue).toLocaleString('pt-BR')}
+                            </p>
+                            {!viewingHistoricalMonth && (
+                                <p className="stat-sublabel">Esperado: R$ {expectedRevenue.toLocaleString('pt-BR')}</p>
+                            )}
                         </div>
                         <div className="stat-icon success">
                             <DollarSign size={24} />
@@ -220,8 +322,12 @@ export function Dashboard() {
                 <div className="stat-card warning">
                     <div className="stat-card-content">
                         <div>
-                            <p className="stat-label">Inadimplentes</p>
-                            <p className="stat-value">{overdueStudents.length}</p>
+                            <p className="stat-label">
+                                {viewingHistoricalMonth ? 'Inadimplentes (Fechamento)' : 'Inadimplentes'}
+                            </p>
+                            <p className="stat-value">
+                                {viewingHistoricalMonth ? selectedSnapshot!.overdueCount : overdueStudents.length}
+                            </p>
                         </div>
                         <div className="stat-icon warning">
                             <AlertCircle size={24} />
@@ -232,8 +338,12 @@ export function Dashboard() {
                 <div className="stat-card accent">
                     <div className="stat-card-content">
                         <div>
-                            <p className="stat-label">Presenças Hoje</p>
-                            <p className="stat-value">{todayAttendance.length}</p>
+                            <p className="stat-label">
+                                {viewingHistoricalMonth ? 'Presenças do Mês' : 'Presenças Hoje'}
+                            </p>
+                            <p className="stat-value">
+                                {viewingHistoricalMonth ? selectedSnapshot!.attendanceCount : todayAttendance.length}
+                            </p>
                         </div>
                         <div className="stat-icon danger">
                             <Clock size={24} />
@@ -249,26 +359,26 @@ export function Dashboard() {
                     <div className="p-4 bg-green-100 rounded-lg text-center" style={{ background: '#dcfce7', borderRadius: '8px', padding: '1rem' }}>
                         <p className="text-sm text-green-800" style={{ color: '#166534' }}>Receita</p>
                         <p className="text-2xl font-bold text-green-600" style={{ fontSize: '1.5rem', fontWeight: 700, color: '#16a34a' }}>
-                            R$ {thisMonthRevenue.toLocaleString('pt-BR')}
+                            R$ {(viewingHistoricalMonth ? selectedSnapshot!.revenue : thisMonthRevenue).toLocaleString('pt-BR')}
                         </p>
                     </div>
                     <div className="p-4 bg-red-100 rounded-lg text-center" style={{ background: '#fee2e2', borderRadius: '8px', padding: '1rem' }}>
                         <p className="text-sm text-red-800" style={{ color: '#991b1b' }}>Despesas</p>
                         <p className="text-2xl font-bold text-red-600" style={{ fontSize: '1.5rem', fontWeight: 700, color: '#dc2626' }}>
-                            R$ {thisMonthExpenseTotal.toLocaleString('pt-BR')}
+                            R$ {(viewingHistoricalMonth ? selectedSnapshot!.expenses : thisMonthExpenseTotal).toLocaleString('pt-BR')}
                         </p>
                     </div>
                     <div
                         className="p-4 rounded-lg text-center"
                         style={{
-                            background: thisMonthRevenue - thisMonthExpenseTotal >= 0 ? '#dbeafe' : '#fee2e2',
+                            background: (viewingHistoricalMonth ? selectedSnapshot!.profit : thisMonthRevenue - thisMonthExpenseTotal) >= 0 ? '#dbeafe' : '#fee2e2',
                             borderRadius: '8px',
                             padding: '1rem'
                         }}
                     >
-                        <p className="text-sm" style={{ color: thisMonthRevenue - thisMonthExpenseTotal >= 0 ? '#1e40af' : '#991b1b' }}>Lucro</p>
-                        <p className="text-2xl font-bold" style={{ fontSize: '1.5rem', fontWeight: 700, color: thisMonthRevenue - thisMonthExpenseTotal >= 0 ? '#1e40af' : '#dc2626' }}>
-                            R$ {(thisMonthRevenue - thisMonthExpenseTotal).toLocaleString('pt-BR')}
+                        <p className="text-sm" style={{ color: (viewingHistoricalMonth ? selectedSnapshot!.profit : thisMonthRevenue - thisMonthExpenseTotal) >= 0 ? '#1e40af' : '#991b1b' }}>Lucro</p>
+                        <p className="text-2xl font-bold" style={{ fontSize: '1.5rem', fontWeight: 700, color: (viewingHistoricalMonth ? selectedSnapshot!.profit : thisMonthRevenue - thisMonthExpenseTotal) >= 0 ? '#1e40af' : '#dc2626' }}>
+                            R$ {(viewingHistoricalMonth ? selectedSnapshot!.profit : thisMonthRevenue - thisMonthExpenseTotal).toLocaleString('pt-BR')}
                         </p>
                     </div>
                 </div>
@@ -349,6 +459,92 @@ export function Dashboard() {
                             ))}
                         </div>
                     </div>
+                </div>
+            )}
+
+            {/* Notificação de fechamento de mês */}
+            {monthClosed && (
+                <div className="alert alert-success" style={{ background: '#dcfce7', border: '1px solid #16a34a' }}>
+                    <History size={20} />
+                    <div className="alert-content">
+                        <p className="alert-title" style={{ color: '#166534' }}>
+                            ✅ Mês anterior fechado automaticamente!
+                        </p>
+                        <p style={{ color: '#166534', fontSize: '0.875rem' }}>
+                            O fechamento do mês foi salvo no histórico. O dashboard agora exibe dados do novo mês.
+                        </p>
+                    </div>
+                </div>
+            )}
+
+            {/* Histórico de Meses Anteriores */}
+            {monthlyHistory.length > 0 && (
+                <div className="chart-container">
+                    <div
+                        className="chart-title flex justify-between items-center cursor-pointer"
+                        onClick={() => setHistoryCollapsed(!historyCollapsed)}
+                        style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }}
+                    >
+                        <span>
+                            <History size={18} style={{ display: 'inline', marginRight: '0.5rem', verticalAlign: 'middle' }} />
+                            📅 Histórico de Meses ({monthlyHistory.length})
+                        </span>
+                        <button
+                            className="btn btn-sm"
+                            style={{ padding: '0.25rem', background: 'transparent', border: 'none' }}
+                            title={historyCollapsed ? 'Expandir' : 'Minimizar'}
+                        >
+                            {historyCollapsed ? <ChevronDown size={18} /> : <ChevronUp size={18} />}
+                        </button>
+                    </div>
+                    {!historyCollapsed && (
+                        <div className="mt-4" style={{ marginTop: '1rem' }}>
+                            <table className="table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+                                <thead>
+                                    <tr style={{ borderBottom: '2px solid #e5e7eb', textAlign: 'left' }}>
+                                        <th style={{ padding: '0.75rem', fontWeight: 600 }}>Mês</th>
+                                        <th style={{ padding: '0.75rem', fontWeight: 600, textAlign: 'right' }}>Receita</th>
+                                        <th style={{ padding: '0.75rem', fontWeight: 600, textAlign: 'right' }}>Despesas</th>
+                                        <th style={{ padding: '0.75rem', fontWeight: 600, textAlign: 'right' }}>Lucro</th>
+                                        <th style={{ padding: '0.75rem', fontWeight: 600, textAlign: 'center' }}>Alunos</th>
+                                        <th style={{ padding: '0.75rem', fontWeight: 600, textAlign: 'center' }}>Presenças</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {monthlyHistory.map(snapshot => (
+                                        <tr key={snapshot.id} style={{ borderBottom: '1px solid #e5e7eb' }}>
+                                            <td style={{ padding: '0.75rem', fontWeight: 500 }}>
+                                                {getMonthName(snapshot.month)} {snapshot.year}
+                                            </td>
+                                            <td style={{ padding: '0.75rem', textAlign: 'right', color: '#16a34a' }}>
+                                                R$ {snapshot.revenue.toLocaleString('pt-BR')}
+                                            </td>
+                                            <td style={{ padding: '0.75rem', textAlign: 'right', color: '#dc2626' }}>
+                                                R$ {snapshot.expenses.toLocaleString('pt-BR')}
+                                            </td>
+                                            <td style={{
+                                                padding: '0.75rem',
+                                                textAlign: 'right',
+                                                color: snapshot.profit >= 0 ? '#1e40af' : '#dc2626',
+                                                fontWeight: 600
+                                            }}>
+                                                R$ {snapshot.profit.toLocaleString('pt-BR')}
+                                            </td>
+                                            <td style={{ padding: '0.75rem', textAlign: 'center' }}>
+                                                {snapshot.activeStudents}
+                                            </td>
+                                            <td style={{ padding: '0.75rem', textAlign: 'center' }}>
+                                                {snapshot.attendanceCount}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                            <p style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: '0.5rem', textAlign: 'center' }}>
+                                Histórico de fechamentos mensais (registros imutáveis)
+                            </p>
+                        </div>
+                    )}
                 </div>
             )}
         </div>

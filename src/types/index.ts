@@ -83,6 +83,20 @@ export interface PersonalPlan {
     frequencyPerWeek: number; // 1, 2, 3 ou 99 (livre)
 }
 
+// Snapshot mensal - registro imutável de fechamento de mês
+export interface MonthlySnapshot {
+    id: string;              // Formato: "2026-01" (ano-mês)
+    year: number;
+    month: number;           // 0-11 (janeiro = 0)
+    revenue: number;         // Total de receitas do mês
+    expenses: number;        // Total de despesas do mês
+    profit: number;          // Receita - Despesas
+    activeStudents: number;  // Alunos ativos no fechamento
+    overdueCount: number;    // Inadimplentes no fechamento
+    attendanceCount: number; // Total de presenças do mês
+    closedAt: string;        // Data/hora do fechamento automático
+}
+
 export interface AppData {
     students: Student[];
     payments: Payment[];
@@ -91,6 +105,7 @@ export interface AppData {
     dailyNotes: DailyNote[];
     plans?: Plan[]; // Added for backup
     personalPlans?: PersonalPlan[]; // Added for backup
+    monthlySnapshots?: MonthlySnapshot[]; // Histórico mensal imutável
     darkMode: boolean;
     version: number;
     lastModified: string;
