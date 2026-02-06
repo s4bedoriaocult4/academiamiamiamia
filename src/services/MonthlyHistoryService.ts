@@ -103,9 +103,11 @@ export async function generateMonthSnapshot(year: number, month: number): Promis
     const activeStudents = students.filter(s => s.status === 'ativo');
 
     // Para inadimplentes, verificamos quem estava com nextDue antes do fim do mês
-    const endOfMonth = new Date(year, month + 1, 0); // Último dia do mês
+    // Último dia do mês às 23:59:59 para incluir vencimentos no último dia
+    const endOfMonth = new Date(year, month + 1, 0, 23, 59, 59, 999);
     const overdueCount = activeStudents.filter(s => {
-        const dueDate = new Date(s.nextDue);
+        // Normaliza a data de vencimento para meia-noite para comparação consistente
+        const dueDate = new Date(s.nextDue + 'T00:00:00');
         return dueDate < endOfMonth;
     }).length;
 

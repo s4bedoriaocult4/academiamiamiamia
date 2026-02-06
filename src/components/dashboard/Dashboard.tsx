@@ -85,8 +85,13 @@ export function Dashboard() {
     // Computed Values
     const activeStudents = students.filter(s => s.status === 'ativo');
 
-    // Check overdue
-    const isOverdue = (dueDate: string): boolean => new Date(dueDate) < new Date();
+    // Check overdue - normaliza ambas datas para meia-noite para evitar falsos positivos
+    const isOverdue = (dueDate: string): boolean => {
+        const due = new Date(dueDate + 'T00:00:00');
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        return due < today;
+    };
     const overdueStudents = activeStudents.filter(s => isOverdue(s.nextDue));
 
     const today = new Date();
