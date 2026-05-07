@@ -437,7 +437,7 @@ export function Dashboard() {
                     <div className="alert-content">
                         <p className="alert-title">⚠️ Alunos com Pagamento Atrasado</p>
                         <div className="mt-2 space-y-2">
-                            {overdueStudents.slice(0, 5).map(s => (
+                            {overdueStudents.map(s => (
                                 <div key={s.id} className="flex justify-between text-sm py-1 border-b border-red-200 last:border-0" style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0' }}>
                                     <span>{s.name}</span>
                                     <span className="font-bold">{Math.abs(getDaysUntilDue(s.nextDue))} dias atrasado</span>
