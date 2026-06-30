@@ -74,6 +74,7 @@ export function PlanManager() {
                             <th>Nome</th>
                             <th>Preço (R$)</th>
                             <th>Frequência (Semanal)</th>
+                            <th>Duração (Meses)</th>
                             <th>Ações</th>
                         </tr>
                     </thead>
@@ -105,6 +106,15 @@ export function PlanManager() {
                                         placeholder="1"
                                         value={newPlan.frequency}
                                         onChange={e => setNewPlan({ ...newPlan, frequency: Number(e.target.value) })}
+                                    />
+                                </td>
+                                <td>
+                                    <input
+                                        type="number"
+                                        className="form-input text-sm"
+                                        placeholder="1"
+                                        value={newPlan.durationMonths}
+                                        onChange={e => setNewPlan({ ...newPlan, durationMonths: Number(e.target.value) })}
                                     />
                                 </td>
                                 <td>
@@ -152,6 +162,18 @@ export function PlanManager() {
                                         />
                                     ) : (
                                         <span className="badge badge-gray">{plan.frequency}x / sem</span>
+                                    )}
+                                </td>
+                                <td>
+                                    {editingId === plan.id ? (
+                                        <input
+                                            type="number"
+                                            className="form-input text-sm"
+                                            value={editForm.durationMonths || 1}
+                                            onChange={e => setEditForm({ ...editForm, durationMonths: Number(e.target.value) })}
+                                        />
+                                    ) : (
+                                        <span className="badge badge-primary">{plan.durationMonths || 1} {(plan.durationMonths || 1) === 1 ? 'mês' : 'meses'}</span>
                                     )}
                                 </td>
                                 <td>

@@ -216,7 +216,7 @@ export function StudentModal({ isOpen, onClose, studentToEdit }: StudentModalPro
     const getAge = (birthDate?: string) => {
         if (!birthDate) return 0;
         const today = new Date();
-        const birth = new Date(birthDate);
+        const birth = new Date(birthDate + 'T12:00:00');
         let age = today.getFullYear() - birth.getFullYear();
         const m = today.getMonth() - birth.getMonth();
         if (m < 0 || (m === 0 && today.getDate() < birth.getDate())) {

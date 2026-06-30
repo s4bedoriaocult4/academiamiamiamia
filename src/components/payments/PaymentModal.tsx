@@ -118,7 +118,9 @@ export function PaymentModal({ isOpen, onClose, paymentToEdit, initialData }: Pa
                     if (formData.type === 'pagamento') {
                         const currentRef = new Date(formData.referenceMonth + '-05');
                         const nextMonth = new Date(currentRef);
-                        nextMonth.setMonth(nextMonth.getMonth() + 1);
+                        const plan = plans.find(p => p.id === student?.plan);
+                        const duration = plan?.durationMonths || 1;
+                        nextMonth.setMonth(nextMonth.getMonth() + duration);
                         const dueDay = student?.dueDay || 5;
                         nextMonth.setDate(dueDay);
 

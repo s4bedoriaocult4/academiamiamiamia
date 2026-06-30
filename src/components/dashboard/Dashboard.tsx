@@ -134,13 +134,13 @@ export function Dashboard() {
     const getBirthdayStudents = () => {
         return activeStudents.filter(s => {
             if (!s.birthDate) return false;
-            const birth = new Date(s.birthDate);
+            const birth = new Date(s.birthDate + 'T12:00:00');
             const birthMonth = birth.getMonth();
             return birthMonth === currentMonth;
         }).sort((a, b) => {
             if (!a.birthDate || !b.birthDate) return 0;
-            const aDay = new Date(a.birthDate).getDate();
-            const bDay = new Date(b.birthDate).getDate();
+            const aDay = new Date(a.birthDate + 'T12:00:00').getDate();
+            const bDay = new Date(b.birthDate + 'T12:00:00').getDate();
             return aDay - bDay;
         });
     };
@@ -148,7 +148,7 @@ export function Dashboard() {
     const birthdayStudents = getBirthdayStudents();
     const todayBirthdays = birthdayStudents.filter(s => {
         if (!s.birthDate) return false;
-        const birth = new Date(s.birthDate);
+        const birth = new Date(s.birthDate + 'T12:00:00');
         return birth.getMonth() === currentMonth && birth.getDate() === today.getDate();
     });
 
@@ -262,7 +262,7 @@ export function Dashboard() {
                             <div className="mt-2 space-y-2">
                                 {birthdayStudents.map(s => {
                                     if (!s.birthDate) return null;
-                                    const birth = new Date(s.birthDate);
+                                    const birth = new Date(s.birthDate + 'T12:00:00');
                                     const isToday = birth.getMonth() === currentMonth && birth.getDate() === today.getDate();
                                     const day = birth.getDate();
                                     return (
