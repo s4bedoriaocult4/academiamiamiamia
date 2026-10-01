@@ -11,6 +11,7 @@
 
 import { db } from './db';
 import { MonthlySnapshot } from '../types';
+import { getYearMonth, getCurrentMonthString } from '../utils/dateUtils';
 
 /**
  * Gera o ID do mês no formato "YYYY-MM"
@@ -82,20 +83,14 @@ export async function checkAndCloseMonth(): Promise<boolean> {
 export async function generateMonthSnapshot(year: number, month: number): Promise<MonthlySnapshot> {
     const monthId = getMonthId(year, month);
 
-    // Buscar todos os pagamentos do mês
+    // Buscar todos os pagamentos do mês usando correspondência segura de YYYY-MM
     const payments = await db.payments.toArray();
-    const monthPayments = payments.filter(p => {
-        const pDate = new Date(p.date);
-        return pDate.getMonth() === month && pDate.getFullYear() === year;
-    });
+    const monthPayments = payments.filter(p => p.date && getYearMonth(p.date) === monthId);
     const revenue = monthPayments.reduce((sum, p) => sum + p.amount, 0);
 
     // Buscar todas as despesas do mês
     const expenses = await db.expenses.toArray();
-    const monthExpenses = expenses.filter(e => {
-        const eDate = new Date(e.date);
-        return eDate.getMonth() === month && eDate.getFullYear() === year;
-    });
+    const monthExpenses = expenses.filter(e => e.date && getYearMonth(e.date) === monthId);
     const expenseTotal = monthExpenses.reduce((sum, e) => sum + e.amount, 0);
 
     // Calcular alunos ativos e inadimplentes no último dia do mês
@@ -113,10 +108,7 @@ export async function generateMonthSnapshot(year: number, month: number): Promis
 
     // Contar presenças do mês
     const attendance = await db.attendance.toArray();
-    const monthAttendance = attendance.filter(a => {
-        const aDate = new Date(a.date);
-        return aDate.getMonth() === month && aDate.getFullYear() === year;
-    });
+    const monthAttendance = attendance.filter(a => a.date && getYearMonth(a.date) === monthId);
 
     const snapshot: MonthlySnapshot = {
         id: monthId,
@@ -177,10 +169,6 @@ export function getMonthName(month: number): string {
  * @returns número de snapshots gerados
  */
 export async function generateMissingSnapshots(): Promise<number> {
-    const today = new Date();
-    const currentYear = today.getFullYear();
-    const currentMonth = today.getMonth();
-
     // Buscar todos os pagamentos e despesas para identificar meses com dados
     const payments = await db.payments.toArray();
     const expenses = await db.expenses.toArray();
@@ -189,20 +177,27 @@ export async function generateMissingSnapshots(): Promise<number> {
     const monthsWithData = new Set<string>();
 
     payments.forEach(p => {
-        const pDate = new Date(p.date);
-        const monthId = getMonthId(pDate.getFullYear(), pDate.getMonth());
-        monthsWithData.add(monthId);
+        if (p.date) {
+            const ym = getYearMonth(p.date);
+            if (ym) monthsWithData.add(ym);
+        }
     });
 
     expenses.forEach(e => {
-        const eDate = new Date(e.date);
-        const monthId = getMonthId(eDate.getFullYear(), eDate.getMonth());
-        monthsWithData.add(monthId);
+        if (e.date) {
+            const ym = getYearMonth(e.date);
+            if (ym) monthsWithData.add(ym);
+        }
     });
 
-    // Remover o mês atual (não deve ser fechado ainda)
-    const currentMonthId = getMonthId(currentYear, currentMonth);
+    // Se por acaso existir snapshot do mês atual (ex: gerado indevidamente por bug de fuso), remover para manter dados dinâmicos
+    const currentMonthId = getCurrentMonthString();
     monthsWithData.delete(currentMonthId);
+    const prematureSnapshot = await db.monthlySnapshots.get(currentMonthId);
+    if (prematureSnapshot) {
+        console.warn(`Removendo snapshot indevido do mês atual em andamento (${currentMonthId})...`);
+        await db.monthlySnapshots.delete(currentMonthId);
+    }
 
     // Buscar snapshots existentes
     const existingSnapshots = await db.monthlySnapshots.toArray();
@@ -228,4 +223,13 @@ export async function generateMissingSnapshots(): Promise<number> {
     }
 
     return generatedCount;
+}
+
+/**
+ * Recalcula e atualiza o snapshot de um mês específico
+ */
+export async function recalculateMonthSnapshot(year: number, month: number): Promise<MonthlySnapshot> {
+    const monthId = getMonthId(year, month);
+    await db.monthlySnapshots.delete(monthId);
+    return generateMonthSnapshot(year, month);
 }

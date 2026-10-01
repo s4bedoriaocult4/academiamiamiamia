@@ -1,11 +1,11 @@
 import { useState, useEffect } from 'react';
 import {
     LayoutDashboard, Users, UserCheck, DollarSign,
-    Settings, Moon, Sun, Menu, X, Dumbbell
+    Settings, Moon, Sun, Menu, X, Dumbbell, HelpCircle
 } from 'lucide-react';
 
 // Services & Hooks
-import { useDbInit } from './hooks/useGymStore';
+import { useDbInit, useSettings } from './hooks/useGymStore';
 import { db } from './services/db';
 
 // Components
@@ -17,11 +17,16 @@ import { ExpenseList } from './components/financial/ExpenseList';
 import { Settings as SettingsPage } from './components/settings/Settings';
 import { LoginPage } from './components/auth/LoginPage';
 import { PersonalDashboard } from './components/students/PersonalDashboard';
+import { HelpPage } from './components/help/HelpPage';
 
 
 function App() {
     const isDbReady = useDbInit();
-    // const settings = useSettings();
+    const settings = useSettings();
+
+    const gymName = settings.find(s => s.key === 'gymName')?.value || 'RESISTÊNCIA MUAY THAI';
+    const gymLogo = settings.find(s => s.key === 'gymLogo')?.value || '🥊';
+
     const [activeTab, setActiveTab] = useState('dashboard');
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
     const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -89,6 +94,7 @@ function App() {
             case 'attendance': return <AttendanceManager />;
             case 'financial': return <ExpenseList />;
             case 'settings': return <SettingsPage />;
+            case 'help': return <HelpPage />;
             default: return <Dashboard />;
         }
     };
@@ -111,8 +117,14 @@ function App() {
             <aside className={`sidebar ${isMobileMenuOpen ? 'open' : ''}`}>
                 <div className="sidebar-header">
                     <div className="logo-container">
-                        <span className="logo-icon">🥊</span>
-                        <h1 className="logo-text">RESISTÊNCIA MUAY THAI</h1>
+                        <span className="logo-icon">
+                            {gymLogo.startsWith('data:image') ? (
+                                <img src={gymLogo} className="logo-img" alt="Logo" />
+                            ) : (
+                                gymLogo
+                            )}
+                        </span>
+                        <h1 className="logo-text">{gymName}</h1>
                     </div>
                     <button
                         className="md:hidden"
@@ -130,6 +142,7 @@ function App() {
                     <NavItem id="payments" icon={DollarSign} label="Pagamentos" />
                     <NavItem id="financial" icon={DollarSign} label="Despesas" />
                     <NavItem id="settings" icon={Settings} label="Configurações" />
+                    <NavItem id="help" icon={HelpCircle} label="Ajuda" />
                 </nav>
 
                 <div className="sidebar-footer">
@@ -152,7 +165,14 @@ function App() {
                 <button onClick={() => setIsMobileMenuOpen(true)}>
                     <Menu size={24} />
                 </button>
-                <h1 className="text-lg font-bold">RESISTÊNCIA MUAY THAI</h1>
+                <div className="flex items-center gap-2 max-w-[70%]">
+                    {gymLogo.startsWith('data:image') ? (
+                        <img src={gymLogo} className="logo-img w-8 h-8 object-contain rounded-md" alt="Logo" />
+                    ) : (
+                        <span className="text-xl">{gymLogo}</span>
+                    )}
+                    <h1 className="text-base font-bold truncate">{gymName}</h1>
+                </div>
                 <div className="w-6"></div> {/* Spacer */}
             </header>
 

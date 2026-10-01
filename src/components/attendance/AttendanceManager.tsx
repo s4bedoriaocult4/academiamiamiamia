@@ -7,13 +7,14 @@ import {
 import { useAttendance, useStudents } from '../../hooks/useGymStore';
 import { Attendance } from '../../types';
 import { db } from '../../services/db';
+import { getTodayDateString, isOverdue, getDaysUntilDue } from '../../utils/dateUtils';
 
 export function AttendanceManager() {
     const students = useStudents();
     const allAttendance = useAttendance();
     const plans = useLiveQuery(() => db.plans.toArray()) || [];
     const activeStudents = students.filter(s => s.status === 'ativo');
-    const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+    const [selectedDate, setSelectedDate] = useState(getTodayDateString());
     const [searchTerm, setSearchTerm] = useState('');
     const [activeTab, setActiveTab] = useState<'checkin' | 'records'>('checkin');
 
@@ -201,20 +202,26 @@ export function AttendanceManager() {
                             .map(student => {
                                 const hasAttendance = selectedDateAttendance.some(a => a.studentId === student.id && a.attendanceType !== 'personal');
                                 const plan = plans.find(p => p.id === student.plan);
+                                const isLate = isOverdue(student.nextDue);
 
                                 return (
                                     <div
                                         key={student.id}
                                         onClick={() => !hasAttendance && handleCheckIn(student.id)}
-                                        className={`attendance-card ${hasAttendance ? 'present' : ''}`}
+                                        className={`attendance-card ${hasAttendance ? 'present' : ''} ${isLate && !hasAttendance ? 'border-l-4 border-l-red-500' : ''}`}
                                     >
                                         <div className="attendance-card-header">
                                             <span className="student-name text-sm md:text-base">{student.name}</span>
                                             {hasAttendance && <Check size={22} style={{ color: 'var(--success)' }} />}
                                         </div>
                                         <div className="attendance-card-info">
-                                            <div className="flex flex-col">
+                                            <div className="flex flex-col gap-1">
                                                 <span className="text-xs" style={{ color: 'var(--gray-500)' }}>{plan?.name}</span>
+                                                {isLate && (
+                                                    <span className="text-xs font-semibold text-red-600 bg-red-50 px-1.5 py-0.5 rounded border border-red-200 inline-block w-fit">
+                                                        ⚠️ Mensalidade Vencida ({Math.abs(getDaysUntilDue(student.nextDue))}d)
+                                                    </span>
+                                                )}
                                             </div>
                                             <span className="time">{hasAttendance ? '✓ Presente' : 'Clique para marcar'}</span>
                                         </div>

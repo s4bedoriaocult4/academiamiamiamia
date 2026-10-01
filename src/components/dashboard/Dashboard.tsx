@@ -11,6 +11,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../../services/db';
 import { checkAndCloseMonth, getMonthHistory, getMonthName, generateMissingSnapshots } from '../../services/MonthlyHistoryService';
 import { MonthlySnapshot } from '../../types';
+import { isOverdue, getDaysUntilDue, getTodayDateString, getCurrentMonthString, getYearMonth } from '../../utils/dateUtils';
 
 const CHART_COLORS = ['#1e40af', '#3b82f6', '#60a5fa', '#93c5fd', '#bfdbfe'];
 
@@ -85,29 +86,22 @@ export function Dashboard() {
     // Computed Values
     const activeStudents = students.filter(s => s.status === 'ativo');
 
-    // Check overdue - normaliza ambas datas para meia-noite para evitar falsos positivos
-    const isOverdue = (dueDate: string): boolean => {
-        const due = new Date(dueDate + 'T00:00:00');
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        return due < today;
-    };
     const overdueStudents = activeStudents.filter(s => isOverdue(s.nextDue));
 
     const today = new Date();
     const currentMonth = today.getMonth();
     const currentYear = today.getFullYear();
-    const todayStr = today.toISOString().split('T')[0];
+    const todayStr = getTodayDateString();
+
+    const currentYearMonth = getCurrentMonthString();
 
     const thisMonthPayments = payments.filter(p => {
-        const pDate = new Date(p.date);
-        return pDate.getMonth() === currentMonth && pDate.getFullYear() === currentYear;
+        return p.date && getYearMonth(p.date) === currentYearMonth;
     });
     const thisMonthRevenue = thisMonthPayments.reduce((sum, p) => sum + p.amount, 0);
 
     const thisMonthExpenses = expenses.filter(e => {
-        const eDate = new Date(e.date);
-        return eDate.getMonth() === currentMonth && eDate.getFullYear() === currentYear;
+        return e.date && getYearMonth(e.date) === currentYearMonth;
     });
     const thisMonthExpenseTotal = thisMonthExpenses.reduce((sum, e) => sum + e.amount, 0);
 
@@ -117,13 +111,6 @@ export function Dashboard() {
     }, 0);
 
     const todayAttendance = attendance.filter(a => a.date === todayStr);
-
-    const getDaysUntilDue = (dueDate: string): number => {
-        const t = new Date();
-        t.setHours(0, 0, 0, 0);
-        const due = new Date(dueDate);
-        return Math.ceil((due.getTime() - t.getTime()) / (1000 * 60 * 60 * 24));
-    };
 
     const dueThisWeek = activeStudents.filter(s => {
         const days = getDaysUntilDue(s.nextDue);
@@ -156,17 +143,18 @@ export function Dashboard() {
     const getRevenueChartData = () => {
         const months = [];
         for (let i = 5; i >= 0; i--) {
-            const d = new Date(currentYear, currentMonth - i, 1);
+            let targetYear = currentYear;
+            let targetMonth = currentMonth - i;
+            while (targetMonth < 0) {
+                targetMonth += 12;
+                targetYear -= 1;
+            }
+            const targetMonthStr = `${targetYear}-${String(targetMonth + 1).padStart(2, '0')}`;
+            const d = new Date(targetYear, targetMonth, 1, 12, 0, 0);
             const monthName = d.toLocaleDateString('pt-BR', { month: 'short' });
 
-            const mPayments = payments.filter(p => {
-                const pd = new Date(p.date);
-                return pd.getMonth() === d.getMonth() && pd.getFullYear() === d.getFullYear();
-            });
-            const mExpenses = expenses.filter(e => {
-                const ed = new Date(e.date);
-                return ed.getMonth() === d.getMonth() && ed.getFullYear() === d.getFullYear();
-            });
+            const mPayments = payments.filter(p => p.date && getYearMonth(p.date) === targetMonthStr);
+            const mExpenses = expenses.filter(e => e.date && getYearMonth(e.date) === targetMonthStr);
 
             months.push({
                 month: monthName,
@@ -440,7 +428,9 @@ export function Dashboard() {
                             {overdueStudents.map(s => (
                                 <div key={s.id} className="flex justify-between text-sm py-1 border-b border-red-200 last:border-0" style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0' }}>
                                     <span>{s.name}</span>
-                                    <span className="font-bold">{Math.abs(getDaysUntilDue(s.nextDue))} dias atrasado</span>
+                                    <span className="font-bold">
+                                        {Math.abs(getDaysUntilDue(s.nextDue)) === 1 ? '1 dia atrasado' : `${Math.abs(getDaysUntilDue(s.nextDue))} dias atrasado`}
+                                    </span>
                                 </div>
                             ))}
                         </div>
@@ -454,14 +444,17 @@ export function Dashboard() {
                     <div className="alert-content">
                         <p className="alert-title">📅 Vencimentos na Semana</p>
                         <div className="mt-2 space-y-2">
-                            {dueThisWeek.map(s => (
-                                <div key={s.id} className="flex justify-between text-sm py-1 border-b border-yellow-200" style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0' }}>
-                                    <span>{s.name}</span>
-                                    <span className="font-bold">
-                                        {getDaysUntilDue(s.nextDue) === 0 ? 'Hoje!' : `${getDaysUntilDue(s.nextDue)} dias`}
-                                    </span>
-                                </div>
-                            ))}
+                            {dueThisWeek.map(s => {
+                                const days = getDaysUntilDue(s.nextDue);
+                                return (
+                                    <div key={s.id} className="flex justify-between text-sm py-1 border-b border-yellow-200" style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0' }}>
+                                        <span>{s.name}</span>
+                                        <span className="font-bold">
+                                            {days === 0 ? 'Hoje!' : days === 1 ? 'Amanhã' : `Em ${days} dias`}
+                                        </span>
+                                    </div>
+                                );
+                            })}
                         </div>
                     </div>
                 </div>

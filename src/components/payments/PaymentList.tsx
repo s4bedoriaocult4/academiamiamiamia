@@ -4,6 +4,7 @@ import { usePayments } from '../../hooks/useGymStore';
 import { Payment } from '../../types';
 import { db } from '../../services/db';
 import { PaymentModal } from './PaymentModal';
+import { formatDateBR, formatReferenceMonth, calculateNextDueDate, calculateInitialDueDate } from '../../utils/dateUtils';
 
 export function PaymentList() {
     const payments = usePayments();
@@ -18,7 +19,6 @@ export function PaymentList() {
 
     const filtered = sortedPayments.filter(p => {
         const searchLower = searchTerm.toLowerCase();
-        // Handle legacy types
         const typeLabel = p.type === 'item_vendido' ? 'entrada' : (p.type || 'pagamento');
 
         return (
@@ -35,9 +35,45 @@ export function PaymentList() {
     const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
     const paginatedPayments = filtered.slice(startIndex, startIndex + ITEMS_PER_PAGE);
 
-    const handleDelete = async (id: string) => {
-        if (confirm('Excluir esta transação?')) {
-            await db.payments.delete(id);
+    const handleDelete = async (payment: Payment) => {
+        if (!confirm('Excluir esta transação?')) return;
+
+        try {
+            await db.transaction('rw', [db.payments, db.students, db.plans], async () => {
+                await db.payments.delete(payment.id);
+
+                // Se era uma mensalidade de aluno, recalcular o nextDue
+                if (payment.studentId && (payment.type === 'pagamento' || !payment.type)) {
+                    const student = await db.students.get(payment.studentId);
+                    if (student) {
+                        const remainingPayments = await db.payments
+                            .where('studentId')
+                            .equals(student.id)
+                            .toArray();
+
+                        const monthlyRemaining = remainingPayments
+                            .filter(p => p.id !== payment.id && (p.type === 'pagamento' || !p.type) && p.referenceMonth)
+                            .sort((a, b) => (a.referenceMonth! > b.referenceMonth! ? 1 : -1));
+
+                        const plans = await db.plans.toArray();
+                        const plan = plans.find(p => p.id === student.plan);
+                        const duration = plan?.durationMonths || 1;
+
+                        if (monthlyRemaining.length > 0) {
+                            const lastPaid = monthlyRemaining[monthlyRemaining.length - 1];
+                            const newNextDue = calculateNextDueDate(lastPaid.referenceMonth!, student.dueDay || 5, duration);
+                            await db.students.update(student.id, { nextDue: newNextDue });
+                        } else {
+                            // Não restou nenhum pagamento: volta para o vencimento inicial a partir da startDate
+                            const initialDue = calculateInitialDueDate(student.startDate, student.dueDay || 5, false);
+                            await db.students.update(student.id, { nextDue: initialDue });
+                        }
+                    }
+                }
+            });
+        } catch (error) {
+            console.error('Erro ao excluir transação:', error);
+            alert('Erro ao excluir transação');
         }
     };
 
@@ -54,7 +90,7 @@ export function PaymentList() {
     const getBadgeStyle = (type: string) => {
         switch (type) {
             case 'pagamento': return 'badge-success';
-            case 'personal': return 'badge-blue'; // Ensure this class exists or use inline style if not
+            case 'personal': return 'badge-blue';
             case 'entrada': return 'badge-primary';
             case 'item_vendido': return 'badge-primary';
             default: return 'badge-secondary';
@@ -121,7 +157,7 @@ export function PaymentList() {
                                                     {getTypeLabel(type)}
                                                 </span>
                                             </td>
-                                            <td>{new Date(payment.date + 'T12:00:00').toLocaleDateString('pt-BR')}</td>
+                                            <td>{formatDateBR(payment.date)}</td>
                                             <td className="font-medium">
                                                 {type === 'entrada' || type === 'item_vendido' ? (
                                                     <span title={payment.itemDescription}>{payment.itemDescription || 'Venda Avulsa'}</span>
@@ -129,7 +165,7 @@ export function PaymentList() {
                                                     payment.studentName || 'N/A'
                                                 )}
                                             </td>
-                                            <td>{payment.referenceMonth || '-'}</td>
+                                            <td>{formatReferenceMonth(payment.referenceMonth)}</td>
                                             <td><span className="badge badge-secondary">{payment.method}</span></td>
                                             <td>
                                                 <div>
@@ -148,10 +184,10 @@ export function PaymentList() {
                                             </td>
                                             <td>
                                                 <div className="action-buttons justify-end">
-                                                    <button onClick={() => handleEdit(payment)} className="action-btn primary">
+                                                    <button onClick={() => handleEdit(payment)} className="action-btn primary" title="Editar">
                                                         <Edit size={18} />
                                                     </button>
-                                                    <button onClick={() => handleDelete(payment.id)} className="action-btn danger">
+                                                    <button onClick={() => handleDelete(payment)} className="action-btn danger" title="Excluir">
                                                         <Trash2 size={18} />
                                                     </button>
                                                 </div>

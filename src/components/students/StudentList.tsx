@@ -1,11 +1,13 @@
 import { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Plus, Search, Edit, Trash2, ChevronLeft, ChevronRight, Eye } from 'lucide-react';
+import { Plus, Search, Edit, Trash2, ChevronLeft, ChevronRight, Eye, DollarSign } from 'lucide-react';
 import { useStudents } from '../../hooks/useGymStore';
 import { Student } from '../../types';
 import { db } from '../../services/db';
 import { StudentModal } from './StudentModal';
 import { StudentViewModal } from './StudentViewModal';
+import { PaymentModal } from '../payments/PaymentModal';
+import { getStudentPaymentStatus, formatDateBR } from '../../utils/dateUtils';
 
 export function StudentList() {
     const students = useStudents();
@@ -16,6 +18,10 @@ export function StudentList() {
     const [editingStudent, setEditingStudent] = useState<Student | null>(null);
     const [isViewModalOpen, setIsViewModalOpen] = useState(false);
     const [viewingStudent, setViewingStudent] = useState<Student | null>(null);
+
+    // Estado para atalho rápido de pagamento
+    const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
+    const [paymentStudentId, setPaymentStudentId] = useState<string | null>(null);
 
     // Helper to get plan name
     const getPlanName = (planId: string) => {
@@ -46,9 +52,14 @@ export function StudentList() {
         setIsViewModalOpen(true);
     };
 
+    const handleQuickPayment = (student: Student) => {
+        setPaymentStudentId(student.id);
+        setIsPaymentModalOpen(true);
+    };
+
     const handleDelete = async (id: string) => {
-        if (confirm('Tem certeza que deseja excluir? Isso apagará pagamentos e presenças também.')) {
-            await db.transaction('rw', db.students, db.payments, db.attendance, async () => {
+        if (confirm('Tem certeza que deseja excluir este aluno? Isso apagará também seu histórico de pagamentos e presenças.')) {
+            await db.transaction('rw', [db.students, db.payments, db.attendance], async () => {
                 await db.students.delete(id);
                 await db.payments.where('studentId').equals(id).delete();
                 await db.attendance.where('studentId').equals(id).delete();
@@ -68,7 +79,7 @@ export function StudentList() {
                     <Search className="icon" size={18} />
                     <input
                         className="form-input"
-                        placeholder="Buscar aluno..."
+                        placeholder="Buscar por nome, telefone ou status..."
                         value={searchTerm}
                         onChange={e => { setSearchTerm(e.target.value); setCurrentPage(1); }}
                     />
@@ -86,6 +97,7 @@ export function StudentList() {
                                 <th>Nome</th>
                                 <th>Telefone</th>
                                 <th>Plano</th>
+                                <th>Mensalidade / Vencimento</th>
                                 <th>Graduação</th>
                                 <th>Status</th>
                                 <th className="text-right">Ações</th>
@@ -94,7 +106,7 @@ export function StudentList() {
                         <tbody>
                             {paginatedStudents.length === 0 ? (
                                 <tr>
-                                    <td colSpan={6} className="text-center p-8 text-gray-500">
+                                    <td colSpan={7} className="text-center p-8 text-gray-500">
                                         Nenhum aluno encontrado.
                                     </td>
                                 </tr>
@@ -103,12 +115,18 @@ export function StudentList() {
                                     const planType = student.planType || 'normal';
                                     const showNormal = planType === 'normal' || planType === 'both';
                                     const showPersonal = planType === 'personal' || planType === 'both';
+                                    const paymentInfo = getStudentPaymentStatus(student);
 
                                     return (
                                         <tr key={student.id}>
-                                            <td className="font-medium">{student.name}</td>
+                                            <td className="font-medium">
+                                                <div>{student.name}</div>
+                                                {student.dueDay && (
+                                                    <span className="text-xs text-gray-400">Vence todo dia {student.dueDay}</span>
+                                                )}
+                                            </td>
                                             <td>{student.phone}</td>
-                                            <td className="px-6 py-4 whitespace-nowrap">
+                                            <td className="whitespace-nowrap">
                                                 <div className="flex flex-col gap-1 items-start">
                                                     {showNormal && (
                                                         <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-blue-100 text-blue-800">
@@ -117,7 +135,19 @@ export function StudentList() {
                                                     )}
                                                     {showPersonal && (
                                                         <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-indigo-100 text-indigo-800">
-                                                            Personal
+                                                            Personal ({student.personalClassesRemaining || 0} aulas)
+                                                        </span>
+                                                    )}
+                                                </div>
+                                            </td>
+                                            <td>
+                                                <div className="flex flex-col items-start gap-1">
+                                                    <span className={`badge ${paymentInfo.badgeClass}`}>
+                                                        {paymentInfo.label}
+                                                    </span>
+                                                    {student.status === 'ativo' && student.nextDue && (
+                                                        <span className="text-xs text-gray-500">
+                                                            Próx: {formatDateBR(student.nextDue)}
                                                         </span>
                                                     )}
                                                 </div>
@@ -130,6 +160,13 @@ export function StudentList() {
                                             </td>
                                             <td>
                                                 <div className="action-buttons justify-end">
+                                                    <button
+                                                        onClick={() => handleQuickPayment(student)}
+                                                        className="action-btn success"
+                                                        title="Receber Pagamento"
+                                                    >
+                                                        <DollarSign size={18} />
+                                                    </button>
                                                     <button onClick={() => handleView(student)} className="action-btn primary" title="Ver Cadastro">
                                                         <Eye size={18} />
                                                     </button>
@@ -168,7 +205,7 @@ export function StudentList() {
                                 onClick={() => setCurrentPage(p => p + 1)}
                                 className="btn btn-outline btn-sm"
                             >
-                                Próximo <ChevronRight size={16} />
+                                Próxima <ChevronRight size={16} />
                             </button>
                         </div>
                     </div>
@@ -185,6 +222,19 @@ export function StudentList() {
                 isOpen={isViewModalOpen}
                 onClose={() => setIsViewModalOpen(false)}
                 student={viewingStudent}
+            />
+
+            {/* Modal de Pagamento Rápido acionado direto pela lista */}
+            <PaymentModal
+                isOpen={isPaymentModalOpen}
+                onClose={() => {
+                    setIsPaymentModalOpen(false);
+                    setPaymentStudentId(null);
+                }}
+                initialData={{
+                    studentId: paymentStudentId || '',
+                    type: 'pagamento'
+                }}
             />
         </div>
     );

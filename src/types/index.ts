@@ -106,6 +106,9 @@ export interface AppData {
     plans?: Plan[]; // Added for backup
     personalPlans?: PersonalPlan[]; // Added for backup
     monthlySnapshots?: MonthlySnapshot[]; // Histórico mensal imutável
+    settings?: { key: string; value: any }[]; // Configurações completas
+    gymName?: string;
+    gymLogo?: string;
     darkMode: boolean;
     version: number;
     lastModified: string;

@@ -15,15 +15,25 @@ export function LoginPage({ onLogin }: LoginPageProps) {
     const [showPassword, setShowPassword] = useState(false);
     const [showConfirmPassword, setShowConfirmPassword] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
+    const [gymName, setGymName] = useState('RESISTÊNCIA MUAY THAI');
+    const [gymLogo, setGymLogo] = useState('🥊');
 
     useEffect(() => {
-        const checkPassword = async () => {
+        const checkPasswordAndIdentity = async () => {
             const savedPassword = await db.settings.get('appPassword');
             if (!savedPassword?.value) {
                 setIsFirstTime(true);
             }
+            const savedGymName = await db.settings.get('gymName');
+            if (savedGymName?.value) {
+                setGymName(savedGymName.value);
+            }
+            const savedGymLogo = await db.settings.get('gymLogo');
+            if (savedGymLogo?.value) {
+                setGymLogo(savedGymLogo.value);
+            }
         };
-        checkPassword();
+        checkPasswordAndIdentity();
     }, []);
 
     const handleSubmit = async (e: React.FormEvent) => {
@@ -84,11 +94,15 @@ export function LoginPage({ onLogin }: LoginPageProps) {
                 <div className="login-header">
                     <div className="login-logo">
                         <div className="login-logo-icon">
-                            <span className="login-emoji">🥊</span>
+                            {gymLogo.startsWith('data:image') ? (
+                                <img src={gymLogo} className="logo-img w-16 h-16 object-contain rounded-xl" alt="Logo" />
+                            ) : (
+                                <span className="login-emoji">{gymLogo}</span>
+                            )}
                             <ShieldCheck size={24} className="login-shield" />
                         </div>
                     </div>
-                    <h1 className="login-title">RESISTÊNCIA MUAY THAI</h1>
+                    <h1 className="login-title">{gymName}</h1>
                     <p className="login-subtitle">
                         {isFirstTime ? (
                             <>

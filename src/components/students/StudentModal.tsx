@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { X } from 'lucide-react';
-import { Student, GRADUATIONS, DUE_OPTIONS } from '../../types';
+import { X, CheckCircle2 } from 'lucide-react';
+import { Student, GRADUATIONS, DUE_OPTIONS, PAYMENT_METHODS } from '../../types';
 import { db } from '../../services/db';
+import { getTodayDateString, calculateInitialDueDate } from '../../utils/dateUtils';
 
 interface StudentModalProps {
     isOpen: boolean;
@@ -11,10 +12,8 @@ interface StudentModalProps {
 }
 
 export function StudentModal({ isOpen, onClose, studentToEdit }: StudentModalProps) {
-    // Fetch Plans dynamically - mover para cima para poder usar no defaultFormData
     const plans = useLiveQuery(() => db.plans.toArray()) || [];
 
-    // Default values para novos alunos
     const getDefaultFormData = (): Partial<Student> => ({
         name: '',
         phone: '',
@@ -27,7 +26,7 @@ export function StudentModal({ isOpen, onClose, studentToEdit }: StudentModalPro
         plan: plans.length > 0 ? plans[0].id : '1x',
         planType: 'normal',
         dueDay: 5,
-        startDate: new Date().toISOString().split('T')[0],
+        startDate: getTodayDateString(),
         nextDue: '',
         personalClassesRemaining: 0,
         graduation: 'Sem graduação',
@@ -37,14 +36,18 @@ export function StudentModal({ isOpen, onClose, studentToEdit }: StudentModalPro
 
     const [formData, setFormData] = useState<Partial<Student>>(getDefaultFormData());
 
+    // Estados para o primeiro pagamento (apenas no cadastro de novos alunos)
+    const [registerFirstPayment, setRegisterFirstPayment] = useState(true);
+    const [firstPaymentMethod, setFirstPaymentMethod] = useState<'PIX' | 'Dinheiro' | 'Cartão Crédito' | 'Link Pagamento'>('PIX');
+    const [firstPaymentAmount, setFirstPaymentAmount] = useState<number>(0);
+    const [isSubmitting, setIsSubmitting] = useState(false);
+
     useEffect(() => {
         if (studentToEdit) {
-            // Carregar TODOS os campos do aluno, usando defaults para campos undefined
             const defaults = getDefaultFormData();
             setFormData({
                 ...defaults,
                 ...studentToEdit,
-                // Garantir valores não-undefined para campos críticos
                 email: studentToEdit.email || '',
                 cpf: studentToEdit.cpf || '',
                 cep: studentToEdit.cep || '',
@@ -55,36 +58,40 @@ export function StudentModal({ isOpen, onClose, studentToEdit }: StudentModalPro
                 personalClassesRemaining: studentToEdit.personalClassesRemaining || 0
             });
         } else {
-            setFormData(getDefaultFormData());
+            const initialForm = getDefaultFormData();
+            setFormData(initialForm);
+
+            // Pré-selecionar o valor do plano inicial
+            if (plans.length > 0) {
+                const currentPlan = plans.find(p => p.id === initialForm.plan) || plans[0];
+                setFirstPaymentAmount(currentPlan?.price || 0);
+            }
         }
     }, [studentToEdit, isOpen, plans]);
 
-    const getNextDueDate = (baseDate: string, dueDay: number): string => {
-        const base = new Date(baseDate + 'T12:00:00');
-        const month = base.getMonth();
-        const year = base.getFullYear();
-        let due = new Date(year, month, dueDay, 12, 0, 0);
-
-        if (due <= base) {
-            due.setMonth(month + 1);
+    // Atualiza o valor do primeiro pagamento ao trocar de plano
+    useEffect(() => {
+        if (!studentToEdit && formData.plan) {
+            const currentPlan = plans.find(p => p.id === formData.plan);
+            if (currentPlan) {
+                setFirstPaymentAmount(currentPlan.price);
+            }
         }
-        return due.toISOString().split('T')[0];
-    };
+    }, [formData.plan, studentToEdit, plans]);
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
+        if (isSubmitting) return;
 
         if (!formData.name || !formData.phone) {
-            alert('Preencha os campos obrigatórios');
+            alert('Preencha os campos obrigatórios (Nome e Telefone)');
             return;
         }
 
+        setIsSubmitting(true);
+
         try {
             const cleanData = { ...formData };
-
-            // Force planType to 'both' if they have both monthly plan and personal credits? 
-            // Or just 'normal' and treat personal as an addon?
-            // Let's keep 'normal' as default and 'both' if they have > 0 credits, purely for badges in list.
             if ((cleanData.personalClassesRemaining || 0) > 0) {
                 cleanData.planType = 'both';
             } else {
@@ -92,10 +99,13 @@ export function StudentModal({ isOpen, onClose, studentToEdit }: StudentModalPro
             }
 
             if (studentToEdit) {
-                // Edit Logic
-                let nextDue = formData.nextDue;
-                if (Number(formData.dueDay) !== studentToEdit.dueDay) {
-                    nextDue = getNextDueDate(new Date().toISOString().split('T')[0], Number(formData.dueDay));
+                // Lógica de Edição segura: não zera meses atrasados ao alterar o dia do vencimento
+                let nextDue = studentToEdit.nextDue;
+                if (Number(formData.dueDay) !== studentToEdit.dueDay && studentToEdit.nextDue) {
+                    const [y, m] = studentToEdit.nextDue.split('-');
+                    const lastDay = new Date(parseInt(y, 10), parseInt(m, 10), 0).getDate();
+                    const safeDay = Math.min(Number(formData.dueDay), lastDay);
+                    nextDue = `${y}-${m}-${String(safeDay).padStart(2, '0')}`;
                 }
 
                 await db.students.update(studentToEdit.id, {
@@ -111,41 +121,67 @@ export function StudentModal({ isOpen, onClose, studentToEdit }: StudentModalPro
                 }
 
             } else {
-                // Add Logic
-                const nextDue = getNextDueDate(new Date().toISOString().split('T')[0], Number(formData.dueDay));
-                const newStudent: Student = {
-                    id: Date.now().toString(),
-                    name: formData.name!,
-                    phone: formData.phone!,
-                    email: formData.email,
-                    cpf: formData.cpf,
-                    cep: formData.cep,
-                    address: formData.address,
-                    birthDate: formData.birthDate,
-                    responsibleName: formData.responsibleName,
+                // Lógica de Cadastro de Novo Aluno
+                const startDate = formData.startDate || getTodayDateString();
+                const dueDay = Number(formData.dueDay) || 5;
 
-                    plan: formData.plan || '1x',
+                // Calcula o próximo vencimento (se já pagou o 1º mês, joga para o mês seguinte)
+                const nextDue = calculateInitialDueDate(startDate, dueDay, registerFirstPayment);
+
+                const newStudentId = Date.now().toString();
+                const newStudent: Student = {
+                    id: newStudentId,
+                    name: formData.name!.trim(),
+                    phone: formData.phone!.trim(),
+                    email: formData.email?.trim(),
+                    cpf: formData.cpf?.trim(),
+                    cep: formData.cep?.trim(),
+                    address: formData.address?.trim(),
+                    birthDate: formData.birthDate,
+                    responsibleName: formData.responsibleName?.trim(),
+
+                    plan: formData.plan || (plans.length > 0 ? plans[0].id : '1x'),
                     planType: cleanData.planType as any,
 
-                    // Personal fields
-                    personalPlanId: undefined, // Deprecated in favor of generic balance, but kept in type if needed
-                    personalClassesRemaining: Number(formData.personalClassesRemaining),
-                    personalStartDate: undefined, // Transaction based now
+                    personalPlanId: undefined,
+                    personalClassesRemaining: Number(formData.personalClassesRemaining) || 0,
+                    personalStartDate: undefined,
 
-                    dueDay: Number(formData.dueDay),
-                    startDate: formData.startDate!,
+                    dueDay: dueDay,
+                    startDate: startDate,
                     nextDue: nextDue,
                     graduation: formData.graduation || 'Sem graduação',
                     status: 'ativo',
-                    notes: formData.notes,
+                    notes: formData.notes?.trim(),
                     createdAt: new Date().toISOString()
                 };
-                await db.students.add(newStudent);
+
+                await db.transaction('rw', [db.students, db.payments], async () => {
+                    await db.students.add(newStudent);
+
+                    // Se marcou para registrar o primeiro pagamento no caixa
+                    if (registerFirstPayment && firstPaymentAmount > 0) {
+                        await db.payments.add({
+                            id: (Date.now() + 1).toString(),
+                            studentId: newStudentId,
+                            studentName: newStudent.name,
+                            amount: Number(firstPaymentAmount),
+                            method: firstPaymentMethod,
+                            date: startDate,
+                            referenceMonth: startDate.slice(0, 7),
+                            type: 'pagamento',
+                            createdAt: new Date().toISOString()
+                        });
+                    }
+                });
             }
+
             onClose();
         } catch (error) {
-            console.error(error);
+            console.error('Erro ao salvar aluno:', error);
             alert('Erro ao salvar aluno');
+        } finally {
+            setIsSubmitting(false);
         }
     };
 
@@ -228,13 +264,10 @@ export function StudentModal({ isOpen, onClose, studentToEdit }: StudentModalPro
     const age = getAge(formData.birthDate);
     const isMinor = age > 0 && age < 18;
 
-    // Verificar se há dados não salvos
     const hasUnsavedChanges = (): boolean => {
-        // Para novo aluno, verificar se preencheu algo
         if (!studentToEdit) {
             return !!(formData.name || formData.phone || formData.email || formData.cpf || formData.cep || formData.address || formData.birthDate || formData.responsibleName || formData.notes);
         }
-        // Para edição, comparar com dados originais
         return (
             formData.name !== studentToEdit.name ||
             formData.phone !== studentToEdit.phone ||
@@ -269,18 +302,20 @@ export function StudentModal({ isOpen, onClose, studentToEdit }: StudentModalPro
         <div className="modal-overlay" onClick={handleClose}>
             <div className="modal" onClick={e => e.stopPropagation()}>
                 <div className="modal-header">
-                    <h3>{studentToEdit ? '✏️ Editar Aluno' : '➕ Novo Aluno'}</h3>
+                    <h3>{studentToEdit ? '✏️ Editar Aluno' : '👤 Novo Aluno'}</h3>
                     <button onClick={handleClose} className="action-btn"><X size={20} /></button>
                 </div>
                 <form onSubmit={handleSubmit} className="modal-body">
+                    {/* Basic Info */}
                     <div className="form-group">
                         <label className="form-label">Nome Completo *</label>
                         <input
                             required
                             className="form-input"
-                            value={formData.name}
+                            value={formData.name || ''}
                             onChange={e => setFormData({ ...formData, name: e.target.value })}
-                            placeholder="Ex: João Silva"
+                            placeholder="Nome do aluno"
+                            autoFocus
                         />
                     </div>
 
@@ -295,12 +330,12 @@ export function StudentModal({ isOpen, onClose, studentToEdit }: StudentModalPro
                             />
                         </div>
                         <div className="form-group">
-                            <label className="form-label">Telefone *</label>
+                            <label className="form-label">Telefone (WhatsApp) *</label>
                             <input
                                 required
                                 placeholder="(11) 99999-9999"
                                 className="form-input"
-                                value={formData.phone}
+                                value={formData.phone || ''}
                                 onChange={handlePhoneChange}
                                 maxLength={15}
                             />
@@ -365,9 +400,9 @@ export function StudentModal({ isOpen, onClose, studentToEdit }: StudentModalPro
                         />
                     </div>
 
-                    {/* PLAN SELECTION SECTION - SIMPLIFIED */}
+                    {/* PLAN SELECTION SECTION */}
                     <div className="p-4 bg-blue-50/50 rounded-lg border border-blue-100 mb-4 space-y-4">
-                        <h4 className="font-bold text-sm uppercase text-gray-700">Plano Mensal & Aulas</h4>
+                        <h4 className="font-bold text-sm uppercase text-gray-700">Plano Mensal & Vencimento</h4>
 
                         <div className="grid grid-cols-2 gap-4" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
                             <div className="form-group">
@@ -377,17 +412,17 @@ export function StudentModal({ isOpen, onClose, studentToEdit }: StudentModalPro
                                     value={formData.plan}
                                     onChange={e => setFormData({ ...formData, plan: e.target.value })}
                                 >
-                                    {plans.map(p => <option key={p.id} value={p.id}>{p.name} - R$ {p.price}</option>)}
+                                    {plans.map(p => <option key={p.id} value={p.id}>{p.name} - R$ {p.price.toFixed(2)}</option>)}
                                 </select>
                             </div>
                             <div className="form-group">
-                                <label className="form-label">Vencimento</label>
+                                <label className="form-label">Dia de Vencimento</label>
                                 <select
                                     className="form-select"
                                     value={formData.dueDay}
                                     onChange={e => setFormData({ ...formData, dueDay: Number(e.target.value) })}
                                 >
-                                    {DUE_OPTIONS.map(d => <option key={d} value={d}>Dia {d}</option>)}
+                                    {DUE_OPTIONS.map(d => <option key={d} value={d}>Todo dia {d}</option>)}
                                 </select>
                             </div>
                         </div>
@@ -398,20 +433,65 @@ export function StudentModal({ isOpen, onClose, studentToEdit }: StudentModalPro
                                 <input
                                     type="number"
                                     className="form-input bg-white"
-                                    value={formData.personalClassesRemaining}
+                                    value={formData.personalClassesRemaining || 0}
                                     onChange={e => setFormData({ ...formData, personalClassesRemaining: Number(e.target.value) })}
                                 />
                                 <span className="text-xs text-gray-500 w-full">
-                                    Utilize a tela de Pagamentos para vender pacotes. Aqui você ajusta o saldo manualmente.
+                                    Aulas restantes para treino particular de Personal.
                                 </span>
                             </div>
                         </div>
                     </div>
 
+                    {/* FLUXO DE MATRÍCULA COM 1º PAGAMENTO (Apenas Novo Aluno) */}
+                    {!studentToEdit && (
+                        <div className="p-4 bg-green-50 rounded-lg border border-green-200 mb-4">
+                            <label className="flex items-center gap-2 cursor-pointer font-bold text-green-900 text-sm">
+                                <input
+                                    type="checkbox"
+                                    checked={registerFirstPayment}
+                                    onChange={e => setRegisterFirstPayment(e.target.checked)}
+                                    className="w-4 h-4 rounded text-green-600"
+                                />
+                                <span className="flex items-center gap-1.5">
+                                    <CheckCircle2 size={16} className="text-green-600" />
+                                    Registrar pagamento da 1ª mensalidade no caixa agora
+                                </span>
+                            </label>
+
+                            {registerFirstPayment && (
+                                <div className="grid grid-cols-2 gap-3 mt-3 pt-3 border-t border-green-200" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                                    <div>
+                                        <label className="text-xs font-semibold text-green-800">Forma de Pagamento</label>
+                                        <select
+                                            className="form-select text-sm mt-1 bg-white"
+                                            value={firstPaymentMethod}
+                                            onChange={e => setFirstPaymentMethod(e.target.value as any)}
+                                        >
+                                            {PAYMENT_METHODS.map(m => <option key={m} value={m}>{m}</option>)}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="text-xs font-semibold text-green-800">Valor Recebido (R$)</label>
+                                        <input
+                                            type="number"
+                                            step="0.01"
+                                            className="form-input text-sm mt-1 bg-white font-bold text-green-700"
+                                            value={firstPaymentAmount || ''}
+                                            onChange={e => setFirstPaymentAmount(Number(e.target.value))}
+                                        />
+                                    </div>
+                                    <p className="col-span-2 text-xs text-green-700" style={{ gridColumn: 'span 2' }}>
+                                        💡 O valor entrará imediatamente no financeiro e o próximo vencimento será agendado para o mês seguinte.
+                                    </p>
+                                </div>
+                            )}
+                        </div>
+                    )}
 
                     <div className="grid grid-cols-2 gap-4" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
                         <div className="form-group">
-                            <label className="form-label">Data Início</label>
+                            <label className="form-label">Data Início / Matrícula</label>
                             <input
                                 type="date"
                                 className="form-input"
@@ -457,8 +537,13 @@ export function StudentModal({ isOpen, onClose, studentToEdit }: StudentModalPro
                     )}
 
                     <div className="form-group pt-4">
-                        <button type="submit" className="btn btn-primary w-full" style={{ width: '100%' }}>
-                            {studentToEdit ? 'Salvar Alterações' : 'Cadastrar Aluno'}
+                        <button
+                            type="submit"
+                            className="btn btn-primary w-full"
+                            style={{ width: '100%' }}
+                            disabled={isSubmitting}
+                        >
+                            {isSubmitting ? 'Salvando...' : (studentToEdit ? 'Salvar Alterações' : 'Cadastrar Aluno')}
                         </button>
                     </div>
                 </form>
