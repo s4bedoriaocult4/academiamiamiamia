@@ -36,9 +36,9 @@ import {
     signInCloud,
     signInWithGoogle,
     signOutCloud,
-    signUpCloud,
     startRealtimeSync,
     syncAll,
+    UNAUTHORIZED_EMAIL_MESSAGE,
     useSyncStatus,
     verifyAuthorizedCloudUser,
 } from '../../services/syncService';
@@ -227,46 +227,26 @@ export function Settings({ darkMode, onToggleDarkMode }: SettingsProps) {
         showToast('info', 'Conexão local do Supabase removida.');
     };
 
-    const handleCloudLogin = async (isSignUp: boolean) => {
-        if (!authEmail.trim() || authPass.length < 6) {
-            showToast('warning', 'Informe um e-mail válido e senha com pelo menos 6 caracteres.');
+    const handleCloudLogin = async () => {
+        if (!authEmail.trim() || !authPass) {
+            showToast('warning', 'Informe seu e-mail e senha.');
             return;
         }
         setAuthLoading(true);
         try {
-            if (isSignUp) {
-                const res = await signUpCloud(authEmail.trim(), authPass);
-                if (res.error) {
-                    showToast('error', res.error);
-                    return;
-                }
-                if (res.needsConfirmation) {
-                    showToast('info', 'Conta criada! Confirme o e-mail recebido antes de entrar.');
-                    return;
-                }
-                const check = await verifyAuthorizedCloudUser();
-                if (!check.authorized) {
-                    showToast('error', `O e-mail ${check.email || ''} não está liberado em allowed_users no Supabase.`);
-                    return;
-                }
-                await syncAll();
-                startRealtimeSync();
-                showToast('success', 'Conta criada e conectada à nuvem!');
-            } else {
-                const res = await signInCloud(authEmail.trim(), authPass);
-                if (res.error) {
-                    showToast('error', res.error);
-                    return;
-                }
-                const check = await verifyAuthorizedCloudUser();
-                if (!check.authorized) {
-                    showToast('error', `O e-mail ${check.email || ''} não está liberado em allowed_users no Supabase.`);
-                    return;
-                }
-                await syncAll();
-                startRealtimeSync();
-                showToast('success', 'Conectado e sincronizado com a nuvem!');
+            const res = await signInCloud(authEmail.trim(), authPass);
+            if (res.error) {
+                showToast('error', res.error);
+                return;
             }
+            const check = await verifyAuthorizedCloudUser();
+            if (!check.authorized) {
+                showToast('error', UNAUTHORIZED_EMAIL_MESSAGE);
+                return;
+            }
+            await syncAll();
+            startRealtimeSync();
+            showToast('success', 'Conectado e sincronizado com a nuvem!');
             setAuthPass('');
         } finally {
             setAuthLoading(false);
@@ -683,7 +663,7 @@ export function Settings({ darkMode, onToggleDarkMode }: SettingsProps) {
                                         />
                                         <input
                                             type="password"
-                                            placeholder="Senha (mín. 6 caracteres)"
+                                            placeholder="Senha"
                                             value={authPass}
                                             onChange={(e) => setAuthPass(e.target.value)}
                                             className="input"
@@ -693,15 +673,7 @@ export function Settings({ darkMode, onToggleDarkMode }: SettingsProps) {
                                         <button
                                             type="button"
                                             disabled={authLoading}
-                                            onClick={() => handleCloudLogin(true)}
-                                            className="btn btn-secondary btn-sm"
-                                        >
-                                            Criar Conta
-                                        </button>
-                                        <button
-                                            type="button"
-                                            disabled={authLoading}
-                                            onClick={() => handleCloudLogin(false)}
+                                            onClick={handleCloudLogin}
                                             className="btn btn-primary btn-sm"
                                         >
                                             Conectar &amp; Sincronizar

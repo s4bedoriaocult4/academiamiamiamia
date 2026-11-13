@@ -19,6 +19,7 @@ import {
     startRealtimeSync,
     stopRealtimeSync,
     syncAll,
+    UNAUTHORIZED_EMAIL_MESSAGE,
     verifyAuthorizedCloudUser,
 } from './services/syncService';
 import { db } from './services/db';
@@ -111,9 +112,7 @@ export default function App() {
                 if (!check.authorized) {
                     lastVerifiedUserId = null;
                     if (check.reason === 'unauthorized') {
-                        setCloudAuthError(
-                            `O e-mail ${check.email || 'informado'} ainda não está liberado na lista allowed_users do Supabase.`
-                        );
+                        setCloudAuthError(UNAUTHORIZED_EMAIL_MESSAGE);
                     }
                     setIsAuthenticated(false);
                     stopRealtimeSync();
@@ -139,7 +138,12 @@ export default function App() {
                 hashParams.get('error_description') ||
                 hashParams.get('error');
             if (oauthError) {
-                setCloudAuthError(`Falha no login com Google: ${oauthError}`);
+                const lowerErr = oauthError.toLowerCase();
+                setCloudAuthError(
+                    lowerErr.includes('access_denied')
+                        ? 'Login com Google cancelado ou e-mail sem permissão.'
+                        : 'Não foi possível concluir o login com Google. Tente novamente.'
+                );
                 window.history.replaceState({}, document.title, window.location.pathname);
             }
 

@@ -14,8 +14,8 @@ import { isSupabaseConfigured, saveLocalSupabaseConfig } from '../../services/su
 import {
     signInCloud,
     signInWithGoogle,
-    signUpCloud,
     syncAll,
+    UNAUTHORIZED_EMAIL_MESSAGE,
     verifyAuthorizedCloudUser,
 } from '../../services/syncService';
 import { BrandMark } from '../common/BrandMark';
@@ -43,8 +43,6 @@ export function LoginPage({ onLoginSuccess, initialError = '' }: LoginPageProps)
     // Estado Nuvem (Supabase Auth)
     const [email, setEmail] = useState('');
     const [cloudPassword, setCloudPassword] = useState('');
-    const [isSignUpMode, setIsSignUpMode] = useState(false);
-    const [infoMsg, setInfoMsg] = useState('');
 
     // Conexão rápida opcional direto no login
     const [showQuickCloudSetup, setShowQuickCloudSetup] = useState(false);
@@ -104,45 +102,23 @@ export function LoginPage({ onLoginSuccess, initialError = '' }: LoginPageProps)
     const handleCloudSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setError('');
-        setInfoMsg('');
 
         if (!email.trim() || !cloudPassword) {
             setError('Informe seu e-mail e senha.');
             return;
         }
-        if (isSignUpMode && cloudPassword.length < 6) {
-            setError('Para criar conta na nuvem, use uma senha com pelo menos 6 caracteres.');
-            return;
-        }
 
         setIsLoading(true);
         try {
-            if (isSignUpMode) {
-                const res = await signUpCloud(email.trim(), cloudPassword);
-                if (res.error) {
-                    setError(res.error);
-                    setIsLoading(false);
-                    return;
-                }
-                if (res.needsConfirmation) {
-                    setInfoMsg('Conta criada! Verifique seu e-mail para confirmar o cadastro e depois faça login (ou entre pela aba "Senha Local").');
-                    setIsSignUpMode(false);
-                    setIsLoading(false);
-                    return;
-                }
-            } else {
-                const res = await signInCloud(email.trim(), cloudPassword);
-                if (res.error) {
-                    setError(res.error);
-                    setIsLoading(false);
-                    return;
-                }
+            const res = await signInCloud(email.trim(), cloudPassword);
+            if (res.error) {
+                setError(res.error);
+                setIsLoading(false);
+                return;
             }
             const check = await verifyAuthorizedCloudUser();
             if (!check.authorized) {
-                setError(
-                    `O e-mail ${check.email || 'informado'} ainda não está autorizado na tabela allowed_users do Supabase.`
-                );
+                setError(UNAUTHORIZED_EMAIL_MESSAGE);
                 setIsLoading(false);
                 return;
             }
@@ -159,7 +135,6 @@ export function LoginPage({ onLoginSuccess, initialError = '' }: LoginPageProps)
 
     const handleGoogleSignIn = async () => {
         setError('');
-        setInfoMsg('');
         setGoogleLoading(true);
         try {
             const res = await signInWithGoogle();
@@ -309,39 +284,16 @@ export function LoginPage({ onLoginSuccess, initialError = '' }: LoginPageProps)
                                 </div>
                             )}
 
-                            {infoMsg && (
-                                <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-xs font-medium text-emerald-700 dark:text-emerald-300">
-                                    {infoMsg}
-                                </div>
-                            )}
-
                             <button
                                 type="submit"
                                 disabled={isLoading}
                                 className="btn btn-primary w-full py-3"
                             >
-                                {isLoading
-                                    ? 'Conectando...'
-                                    : isSignUpMode
-                                        ? 'Criar Conta e Sincronizar'
-                                        : 'Entrar e Sincronizar'}
+                                {isLoading ? 'Conectando...' : 'Entrar e Sincronizar'}
                                 <ArrowRight className="w-4 h-4" />
                             </button>
 
-                            <div className="flex items-center justify-between text-xs pt-1">
-                                <button
-                                    type="button"
-                                    onClick={() => {
-                                        setIsSignUpMode((v) => !v);
-                                        setError('');
-                                        setInfoMsg('');
-                                    }}
-                                    className="font-semibold text-rose-600 hover:underline dark:text-rose-400"
-                                >
-                                    {isSignUpMode
-                                        ? 'Já tenho conta → Entrar'
-                                        : 'Primeiro acesso? Criar conta na nuvem'}
-                                </button>
+                            <div className="flex items-center justify-end text-xs pt-1">
                                 <button
                                     type="button"
                                     onClick={() => setMode('local')}

@@ -16,6 +16,9 @@ import {
     Student,
 } from '../types';
 
+export const UNAUTHORIZED_EMAIL_MESSAGE =
+    'E-mail incorreto ou sem acesso liberado para esta academia.';
+
 export const LOCAL_ONLY_SETTINGS = new Set([
     'appPassword',
     'lastAccessDate',
@@ -417,22 +420,6 @@ export async function signInCloud(email: string, password: string): Promise<{ er
     return {};
 }
 
-export async function signUpCloud(email: string, password: string): Promise<{ error?: string; needsConfirmation?: boolean }> {
-    const supabase = getSupabaseClient();
-    if (!supabase) {
-        return { error: 'Supabase não está configurado.' };
-    }
-    const { data, error } = await supabase.auth.signUp({
-        email: email.trim(),
-        password,
-        options: {
-            emailRedirectTo: typeof window !== 'undefined' ? window.location.origin : undefined,
-        },
-    });
-    if (error) return { error: error.message };
-    return { needsConfirmation: !data.session };
-}
-
 export async function checkGoogleProviderEnabled(): Promise<boolean> {
     const cfg = getSupabaseConfig();
     if (!cfg) return false;
@@ -656,7 +643,7 @@ export async function syncAll(): Promise<boolean> {
             notifyStatus({
                 state: 'unauthenticated',
                 userEmail: null,
-                lastError: `E-mail ${authCheck.email || ''} não autorizado para acessar a academia.`,
+                lastError: UNAUTHORIZED_EMAIL_MESSAGE,
             });
             return false;
         }
