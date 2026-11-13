@@ -49,6 +49,8 @@ import { PersonalPlanManager } from './PersonalPlanManager';
 import { BackupImportModal } from './BackupImportModal';
 import { ConfirmModal } from '../UI';
 import { useToast } from '../../contexts/ToastContext';
+import { formatStoredLocalPassword } from '../../utils/authHash';
+import { DEFAULT_GYM_LOGO, DEFAULT_GYM_NAME, resolveGymLogo } from '../../utils/branding';
 
 interface SettingsProps {
     darkMode: boolean;
@@ -111,8 +113,8 @@ export function Settings({ darkMode, onToggleDarkMode }: SettingsProps) {
     const [activeTab, setActiveTab] = useState<SettingsTab>('identity');
 
     // Identidade
-    const [gymNameInput, setGymNameInput] = useState('RESISTÊNCIA MUAY THAI');
-    const [gymLogoInput, setGymLogoInput] = useState('🥊');
+    const [gymNameInput, setGymNameInput] = useState(DEFAULT_GYM_NAME);
+    const [gymLogoInput, setGymLogoInput] = useState(DEFAULT_GYM_LOGO);
 
     // Senha local
     const [newPassword, setNewPassword] = useState('');
@@ -138,7 +140,7 @@ export function Settings({ darkMode, onToggleDarkMode }: SettingsProps) {
         const nameSet = settings.find((s) => s.key === 'gymName')?.value;
         const logoSet = settings.find((s) => s.key === 'gymLogo')?.value;
         if (nameSet) setGymNameInput(String(nameSet));
-        if (logoSet) setGymLogoInput(String(logoSet));
+        if (logoSet !== undefined) setGymLogoInput(resolveGymLogo(logoSet));
     }, [settings]);
 
     const handleSaveIdentity = async (e: React.FormEvent) => {
@@ -149,19 +151,19 @@ export function Settings({ darkMode, onToggleDarkMode }: SettingsProps) {
         }
         await saveSettingsBatch({
             gymName: gymNameInput.trim(),
-            gymLogo: gymLogoInput || '🥊',
+            gymLogo: gymLogoInput || DEFAULT_GYM_LOGO,
         });
         showToast('success', 'Identidade da academia salva!');
     };
 
     const handleResetIdentity = async () => {
-        setGymNameInput('RESISTÊNCIA MUAY THAI');
-        setGymLogoInput('🥊');
+        setGymNameInput(DEFAULT_GYM_NAME);
+        setGymLogoInput(DEFAULT_GYM_LOGO);
         await saveSettingsBatch({
-            gymName: 'RESISTÊNCIA MUAY THAI',
-            gymLogo: '🥊',
+            gymName: DEFAULT_GYM_NAME,
+            gymLogo: DEFAULT_GYM_LOGO,
         });
-        showToast('info', 'Identidade restaurada para o padrão.');
+        showToast('info', 'Identidade restaurada para o padrão oficial.');
     };
 
     const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -196,7 +198,10 @@ export function Settings({ darkMode, onToggleDarkMode }: SettingsProps) {
             showToast('warning', 'As senhas não conferem.');
             return;
         }
-        await db.settings.put({ key: 'appPassword', value: newPassword });
+        await db.settings.put({
+            key: 'appPassword',
+            value: formatStoredLocalPassword(newPassword),
+        });
         setNewPassword('');
         setConfirmPassword('');
         showToast('success', 'Senha local deste aparelho atualizada!');
@@ -415,7 +420,13 @@ export function Settings({ darkMode, onToggleDarkMode }: SettingsProps) {
                                 </label>
                                 <input
                                     type="text"
-                                    value={gymLogoInput.startsWith('data:image') ? '' : gymLogoInput}
+                                    value={
+                                        gymLogoInput.startsWith('data:image') ||
+                                        gymLogoInput.startsWith('/') ||
+                                        gymLogoInput.startsWith('http')
+                                            ? ''
+                                            : gymLogoInput
+                                    }
                                     onChange={(e) => setGymLogoInput(e.target.value)}
                                     placeholder="Ou digite um emoji (ex: 🥊)"
                                     className="input flex-1"

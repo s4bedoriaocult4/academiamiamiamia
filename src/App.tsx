@@ -34,6 +34,7 @@ import { HelpPage } from './components/help/HelpPage';
 import { StudentModal } from './components/students/StudentModal';
 import { PaymentModal } from './components/payments/PaymentModal';
 import { LoadingOverlay } from './components/UI';
+import { DEFAULT_GYM_NAME, resolveGymLogo } from './utils/branding';
 
 export default function App() {
     const isDbReady = useDbInit();
@@ -57,11 +58,11 @@ export default function App() {
     const [paymentInitialType, setPaymentInitialType] = useState<'pagamento' | 'personal' | 'entrada'>('pagamento');
 
     const gymName = useMemo(
-        () => String(settings.find((s) => s.key === 'gymName')?.value || 'RESISTÊNCIA MUAY THAI'),
+        () => String(settings.find((s) => s.key === 'gymName')?.value || DEFAULT_GYM_NAME),
         [settings]
     );
     const gymLogo = useMemo(
-        () => String(settings.find((s) => s.key === 'gymLogo')?.value || '🥊'),
+        () => resolveGymLogo(settings.find((s) => s.key === 'gymLogo')?.value),
         [settings]
     );
 
@@ -95,30 +96,48 @@ export default function App() {
         if (!isDbReady) return;
 
         let unsubAuth: (() => void) | undefined;
+        let activeSessionCheck: Promise<void> | null = null;
+        let lastVerifiedUserId: string | null = null;
 
-        const handleAuthenticatedCloudSession = async () => {
-            const check = await verifyAuthorizedCloudUser();
-            if (!check.authorized) {
-                if (check.reason === 'unauthorized') {
-                    setCloudAuthError(
-                        `O e-mail ${check.email || 'informado'} ainda não está liberado na lista allowed_users do Supabase.`
-                    );
+        const handleAuthenticatedCloudSession = async (userId?: string) => {
+            if (userId && lastVerifiedUserId === userId) return;
+            if (activeSessionCheck) return activeSessionCheck;
+
+            activeSessionCheck = (async () => {
+                const check = await verifyAuthorizedCloudUser();
+                if (window.location.search.includes('code=') || window.location.hash.includes('access_token=')) {
+                    window.history.replaceState({}, document.title, window.location.pathname);
                 }
-                setIsAuthenticated(false);
-                stopRealtimeSync();
-                return;
-            }
-            setCloudAuthError('');
-            setIsAuthenticated(true);
-            if (window.location.search.includes('code=') || window.location.hash.includes('access_token=')) {
-                window.history.replaceState({}, document.title, window.location.pathname);
-            }
-            syncAll().then(() => startRealtimeSync());
+                if (!check.authorized) {
+                    lastVerifiedUserId = null;
+                    if (check.reason === 'unauthorized') {
+                        setCloudAuthError(
+                            `O e-mail ${check.email || 'informado'} ainda não está liberado na lista allowed_users do Supabase.`
+                        );
+                    }
+                    setIsAuthenticated(false);
+                    stopRealtimeSync();
+                    return;
+                }
+                lastVerifiedUserId = userId || check.email || 'verified';
+                setCloudAuthError('');
+                setIsAuthenticated(true);
+                syncAll().then(() => startRealtimeSync());
+            })().finally(() => {
+                activeSessionCheck = null;
+            });
+
+            return activeSessionCheck;
         };
 
         const initSession = async () => {
-            const urlParams = new URLSearchParams(window.location.search);
-            const oauthError = urlParams.get('error_description') || urlParams.get('error');
+            const searchParams = new URLSearchParams(window.location.search);
+            const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+            const oauthError =
+                searchParams.get('error_description') ||
+                searchParams.get('error') ||
+                hashParams.get('error_description') ||
+                hashParams.get('error');
             if (oauthError) {
                 setCloudAuthError(`Falha no login com Google: ${oauthError}`);
                 window.history.replaceState({}, document.title, window.location.pathname);
@@ -128,23 +147,24 @@ export default function App() {
             const supabase = getSupabaseClient();
 
             if (supabase) {
-                const { data } = await supabase.auth.getSession();
-                if (data.session) {
-                    await handleAuthenticatedCloudSession();
-                } else if (remembered && !navigator.onLine) {
-                    // Permite acesso offline caso já autenticado anteriormente no aparelho
-                    setIsAuthenticated(true);
-                }
-
                 const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
                     if (session) {
-                        handleAuthenticatedCloudSession();
+                        handleAuthenticatedCloudSession(session.user?.id);
                     } else {
+                        lastVerifiedUserId = null;
                         stopRealtimeSync();
                         refreshSyncStatusFromEnvironment();
                     }
                 });
                 unsubAuth = () => listener.subscription.unsubscribe();
+
+                const { data } = await supabase.auth.getSession();
+                if (data.session) {
+                    await handleAuthenticatedCloudSession(data.session.user?.id);
+                } else if (remembered && !navigator.onLine) {
+                    // Permite acesso offline caso já autenticado anteriormente no aparelho
+                    setIsAuthenticated(true);
+                }
             } else if (remembered) {
                 setIsAuthenticated(true);
             }

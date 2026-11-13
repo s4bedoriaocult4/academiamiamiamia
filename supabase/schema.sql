@@ -187,7 +187,7 @@ CREATE POLICY "Users can check own email authorization"
     TO authenticated
     USING (
         (SELECT auth.uid()) IS NOT NULL
-        AND lower(email) = lower(coalesce((SELECT auth.jwt() ->> 'email'), ''))
+        AND lower(email) = lower(coalesce(((SELECT auth.jwt()) ->> 'email'), ''))
     );
 
 INSERT INTO public.allowed_users (email, role)
@@ -206,7 +206,7 @@ AS $$
     SELECT EXISTS (
         SELECT 1
         FROM public.allowed_users
-        WHERE lower(email) = lower(coalesce((SELECT auth.jwt() ->> 'email'), ''))
+        WHERE lower(email) = lower(coalesce(((SELECT auth.jwt()) ->> 'email'), ''))
     );
 $$;
 

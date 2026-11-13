@@ -1,13 +1,13 @@
 {
-  "name": "Gestão Academia - Sistema de Controle",
-  "short_name": "Academia",
+  "name": "Resistência Muay Thai - Gestão",
+  "short_name": "Resistência MT",
   "description": "Sistema simples e completo de gestão de alunos, mensalidades, presenças e financeiro.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait-primary",
-  "background_color": "#f8fafc",
-  "theme_color": "#2563eb",
+  "background_color": "#09090b",
+  "theme_color": "#0f172a",
   "lang": "pt-BR",
   "icons": [
     {
@@ -21,11 +21,6 @@
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"
-    },
-    {
-      "src": "/icon.svg",
-      "sizes": "any",
-      "type": "image/svg+xml"
     }
   ]
 }

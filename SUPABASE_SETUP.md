@@ -23,11 +23,14 @@ Este sistema funciona em **Modo Local (Offline-First)** imediatamente após o de
 ### Opção B: Login com Google (Gratuito)
 1. No **Google Cloud Console**, crie um OAuth Client ID (*Aplicativo da Web*) com o URI de redirecionamento do Supabase:
    `https://<SEU-PROJETO>.supabase.co/auth/v1/callback`
+   - Se o app no **OAuth Consent Screen** ainda estiver em modo *Testing* ("Em teste"), adicione os e-mails autorizados em **Test users** (ou publique o app clicando em **Publish App**).
 2. No **Supabase** → **Authentication** → **Sign In / Providers** → **Google**, ative e informe **Client ID** e **Client Secret**.
 3. Em **Authentication** → **URL Configuration**, defina a **Site URL** (ex.: `https://seu-site.vercel.app`) e adicione em **Redirect URLs** `https://seu-site.vercel.app/**`.
 4. **Segurança obrigatória:** cadastre o Gmail autorizado na tabela `allowed_users` (no **Table Editor** ou SQL Editor):
    ```sql
-   INSERT INTO public.allowed_users (email, role) VALUES ('gmail-do-dono@gmail.com', 'admin');
+   INSERT INTO public.allowed_users (email, role)
+   VALUES ('seu-email@gmail.com', 'admin')
+   ON CONFLICT (email) DO NOTHING;
    ```
 
 ---

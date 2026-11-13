@@ -1,9 +1,9 @@
-const CACHE_NAME = 'academia-app-v2';
+const CACHE_NAME = 'academia-app-v3';
 const PRECACHE_URLS = [
   '/',
   '/index.html',
   '/manifest.webmanifest',
-  '/icon.svg',
+  '/logo-academia.png',
   '/icon-192.png',
   '/icon-512.png',
 ];

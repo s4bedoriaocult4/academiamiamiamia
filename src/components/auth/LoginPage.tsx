@@ -20,6 +20,8 @@ import {
 } from '../../services/syncService';
 import { BrandMark } from '../common/BrandMark';
 import { GoogleSignInButton } from '../common/GoogleSignInButton';
+import { verifyLocalPassword } from '../../utils/authHash';
+import { DEFAULT_GYM_LOGO, DEFAULT_GYM_NAME, resolveGymLogo } from '../../utils/branding';
 
 interface LoginPageProps {
     onLoginSuccess: () => void;
@@ -30,11 +32,11 @@ export function LoginPage({ onLoginSuccess, initialError = '' }: LoginPageProps)
     const cloudConfigured = isSupabaseConfigured();
 
     const [mode, setMode] = useState<'cloud' | 'local'>(cloudConfigured ? 'cloud' : 'local');
-    const [gymName, setGymName] = useState('RESISTÊNCIA MUAY THAI');
-    const [gymLogo, setGymLogo] = useState('🥊');
+    const [gymName, setGymName] = useState(DEFAULT_GYM_NAME);
+    const [gymLogo, setGymLogo] = useState(DEFAULT_GYM_LOGO);
 
-    // Estado Local (PIN / Senha local)
-    const [storedPassword, setStoredPassword] = useState<string>('admin123');
+    // Estado Local (PIN / Senha local customizada, se existir)
+    const [customStoredPassword, setCustomStoredPassword] = useState<string | null>(null);
     const [localPassword, setLocalPassword] = useState('');
     const [rememberMe, setRememberMe] = useState(true);
 
@@ -69,9 +71,9 @@ export function LoginPage({ onLoginSuccess, initialError = '' }: LoginPageProps)
                     db.settings.get('gymLogo'),
                 ]);
 
-                if (passSetting?.value) setStoredPassword(String(passSetting.value));
+                if (passSetting?.value) setCustomStoredPassword(String(passSetting.value));
                 if (nameSetting?.value) setGymName(String(nameSetting.value));
-                if (logoSetting?.value) setGymLogo(String(logoSetting.value));
+                if (logoSetting?.value) setGymLogo(resolveGymLogo(logoSetting.value));
             } catch {
                 // Usa padrões iniciais
             }
@@ -85,7 +87,7 @@ export function LoginPage({ onLoginSuccess, initialError = '' }: LoginPageProps)
         setIsLoading(true);
 
         try {
-            if (localPassword === storedPassword) {
+            if (verifyLocalPassword(localPassword, customStoredPassword)) {
                 if (rememberMe) {
                     localStorage.setItem('gym_remembered', 'true');
                 }
@@ -345,7 +347,7 @@ export function LoginPage({ onLoginSuccess, initialError = '' }: LoginPageProps)
                                     onClick={() => setMode('local')}
                                     className="font-semibold text-slate-500 hover:text-slate-700 dark:text-slate-400"
                                 >
-                                    Usar PIN local ({storedPassword === 'admin123' ? 'admin123' : '••••'})
+                                    Usar senha local
                                 </button>
                             </div>
                         </form>
@@ -405,12 +407,6 @@ export function LoginPage({ onLoginSuccess, initialError = '' }: LoginPageProps)
                                 Entrar no Sistema
                                 <ArrowRight className="w-4 h-4" />
                             </button>
-
-                            {storedPassword === 'admin123' && (
-                                <p className="text-center text-xs text-slate-500 dark:text-slate-400">
-                                    Senha padrão inicial: <strong className="font-mono">admin123</strong> (você pode alterar em Configurações)
-                                </p>
-                            )}
                         </form>
                     )}
 
