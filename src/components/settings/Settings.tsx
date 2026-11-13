@@ -34,13 +34,16 @@ import {
     pushBatchRecords,
     refreshSyncStatusFromEnvironment,
     signInCloud,
+    signInWithGoogle,
     signOutCloud,
     signUpCloud,
     startRealtimeSync,
     syncAll,
     useSyncStatus,
+    verifyAuthorizedCloudUser,
 } from '../../services/syncService';
 import { BrandMark } from '../common/BrandMark';
+import { GoogleSignInButton } from '../common/GoogleSignInButton';
 import { PlanManager } from './PlanManager';
 import { PersonalPlanManager } from './PersonalPlanManager';
 import { BackupImportModal } from './BackupImportModal';
@@ -236,6 +239,11 @@ export function Settings({ darkMode, onToggleDarkMode }: SettingsProps) {
                     showToast('info', 'Conta criada! Confirme o e-mail recebido antes de entrar.');
                     return;
                 }
+                const check = await verifyAuthorizedCloudUser();
+                if (!check.authorized) {
+                    showToast('error', `O e-mail ${check.email || ''} não está liberado em allowed_users no Supabase.`);
+                    return;
+                }
                 await syncAll();
                 startRealtimeSync();
                 showToast('success', 'Conta criada e conectada à nuvem!');
@@ -245,11 +253,28 @@ export function Settings({ darkMode, onToggleDarkMode }: SettingsProps) {
                     showToast('error', res.error);
                     return;
                 }
+                const check = await verifyAuthorizedCloudUser();
+                if (!check.authorized) {
+                    showToast('error', `O e-mail ${check.email || ''} não está liberado em allowed_users no Supabase.`);
+                    return;
+                }
                 await syncAll();
                 startRealtimeSync();
                 showToast('success', 'Conectado e sincronizado com a nuvem!');
             }
             setAuthPass('');
+        } finally {
+            setAuthLoading(false);
+        }
+    };
+
+    const handleSettingsGoogleLogin = async () => {
+        setAuthLoading(true);
+        try {
+            const res = await signInWithGoogle();
+            if (res.error) {
+                showToast('error', res.error);
+            }
         } finally {
             setAuthLoading(false);
         }
@@ -625,6 +650,17 @@ export function Settings({ darkMode, onToggleDarkMode }: SettingsProps) {
                                 <div className="p-4 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-3">
                                     <div className="text-sm font-bold text-slate-900 dark:text-white">
                                         Entrar na Conta da Academia (Supabase Auth)
+                                    </div>
+                                    <GoogleSignInButton
+                                        onClick={handleSettingsGoogleLogin}
+                                        loading={authLoading}
+                                    />
+                                    <div className="relative flex items-center py-0.5">
+                                        <div className="flex-grow border-t border-slate-200 dark:border-slate-800" />
+                                        <span className="mx-3 text-[11px] font-medium uppercase tracking-wider text-slate-400">
+                                            ou com e-mail e senha
+                                        </span>
+                                        <div className="flex-grow border-t border-slate-200 dark:border-slate-800" />
                                     </div>
                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                         <input

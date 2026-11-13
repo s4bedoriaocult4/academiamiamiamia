@@ -19,6 +19,7 @@ import {
     startRealtimeSync,
     stopRealtimeSync,
     syncAll,
+    verifyAuthorizedCloudUser,
 } from './services/syncService';
 import { db } from './services/db';
 import { AppShell, NavTab } from './components/layout/AppShell';
@@ -44,6 +45,7 @@ export default function App() {
 
     const [isAuthenticated, setIsAuthenticated] = useState(false);
     const [checkingSession, setCheckingSession] = useState(true);
+    const [cloudAuthError, setCloudAuthError] = useState('');
     const [currentTab, setCurrentTab] = useState<NavTab>('dashboard');
     const [darkMode, setDarkMode] = useState(false);
 
@@ -94,15 +96,41 @@ export default function App() {
 
         let unsubAuth: (() => void) | undefined;
 
+        const handleAuthenticatedCloudSession = async () => {
+            const check = await verifyAuthorizedCloudUser();
+            if (!check.authorized) {
+                if (check.reason === 'unauthorized') {
+                    setCloudAuthError(
+                        `O e-mail ${check.email || 'informado'} ainda não está liberado na lista allowed_users do Supabase.`
+                    );
+                }
+                setIsAuthenticated(false);
+                stopRealtimeSync();
+                return;
+            }
+            setCloudAuthError('');
+            setIsAuthenticated(true);
+            if (window.location.search.includes('code=') || window.location.hash.includes('access_token=')) {
+                window.history.replaceState({}, document.title, window.location.pathname);
+            }
+            syncAll().then(() => startRealtimeSync());
+        };
+
         const initSession = async () => {
+            const urlParams = new URLSearchParams(window.location.search);
+            const oauthError = urlParams.get('error_description') || urlParams.get('error');
+            if (oauthError) {
+                setCloudAuthError(`Falha no login com Google: ${oauthError}`);
+                window.history.replaceState({}, document.title, window.location.pathname);
+            }
+
             const remembered = localStorage.getItem('gym_remembered') === 'true';
             const supabase = getSupabaseClient();
 
             if (supabase) {
                 const { data } = await supabase.auth.getSession();
                 if (data.session) {
-                    setIsAuthenticated(true);
-                    syncAll().then(() => startRealtimeSync());
+                    await handleAuthenticatedCloudSession();
                 } else if (remembered && !navigator.onLine) {
                     // Permite acesso offline caso já autenticado anteriormente no aparelho
                     setIsAuthenticated(true);
@@ -110,8 +138,7 @@ export default function App() {
 
                 const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
                     if (session) {
-                        setIsAuthenticated(true);
-                        syncAll().then(() => startRealtimeSync());
+                        handleAuthenticatedCloudSession();
                     } else {
                         stopRealtimeSync();
                         refreshSyncStatusFromEnvironment();
@@ -191,7 +218,15 @@ export default function App() {
     }
 
     if (!isAuthenticated) {
-        return <LoginPage onLoginSuccess={() => setIsAuthenticated(true)} />;
+        return (
+            <LoginPage
+                initialError={cloudAuthError}
+                onLoginSuccess={() => {
+                    setCloudAuthError('');
+                    setIsAuthenticated(true);
+                }}
+            />
+        );
     }
 
     return (

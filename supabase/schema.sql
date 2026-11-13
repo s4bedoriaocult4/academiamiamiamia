@@ -164,9 +164,55 @@ CREATE INDEX IF NOT EXISTS idx_monthly_snapshots_updated_at ON public.monthly_sn
 CREATE INDEX IF NOT EXISTS idx_settings_updated_at ON public.settings(updated_at);
 
 -- ============================================================================
--- SEGURANÇA (RLS - Row Level Security)
--- Apenas usuários autenticados no Supabase Auth podem ler e gravar dados.
+-- SEGURANÇA (RLS - Row Level Security + Lista de E-mails Autorizados)
+-- Impede que contas aleatórias (ex: login com Google de terceiros) acessem a academia.
+-- Para liberar um novo e-mail/Gmail, execute no SQL Editor:
+--   INSERT INTO public.allowed_users (email, role) VALUES ('novo@gmail.com', 'staff') ON CONFLICT DO NOTHING;
 -- ============================================================================
+CREATE TABLE IF NOT EXISTS public.allowed_users (
+    email TEXT PRIMARY KEY,
+    role TEXT NOT NULL DEFAULT 'staff',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE public.allowed_users ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE public.allowed_users FROM anon;
+REVOKE ALL ON TABLE public.allowed_users FROM authenticated;
+GRANT SELECT ON TABLE public.allowed_users TO authenticated;
+
+DROP POLICY IF EXISTS "Users can check own email authorization" ON public.allowed_users;
+CREATE POLICY "Users can check own email authorization"
+    ON public.allowed_users
+    FOR SELECT
+    TO authenticated
+    USING (
+        (SELECT auth.uid()) IS NOT NULL
+        AND lower(email) = lower(coalesce((SELECT auth.jwt() ->> 'email'), ''))
+    );
+
+INSERT INTO public.allowed_users (email, role)
+SELECT lower(email), 'admin'
+FROM auth.users
+WHERE email IS NOT NULL
+ON CONFLICT (email) DO NOTHING;
+
+CREATE OR REPLACE FUNCTION public.is_authorized_gym_user()
+RETURNS BOOLEAN
+LANGUAGE sql
+STABLE
+SECURITY INVOKER
+SET search_path = ''
+AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM public.allowed_users
+        WHERE lower(email) = lower(coalesce((SELECT auth.jwt() ->> 'email'), ''))
+    );
+$$;
+
+REVOKE ALL ON FUNCTION public.is_authorized_gym_user() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.is_authorized_gym_user() TO authenticated;
+
 ALTER TABLE public.plans ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.personal_plans ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.students ENABLE ROW LEVEL SECURITY;
@@ -189,8 +235,10 @@ BEGIN
         EXECUTE format('REVOKE ALL ON TABLE public.%I FROM anon;', tbl);
         EXECUTE format('GRANT ALL ON TABLE public.%I TO authenticated;', tbl);
         EXECUTE format('DROP POLICY IF EXISTS "Authenticated users full access" ON public.%I;', tbl);
+        EXECUTE format('DROP POLICY IF EXISTS "Authenticated users access" ON public.%I;', tbl);
+        EXECUTE format('DROP POLICY IF EXISTS "Authorized gym users access" ON public.%I;', tbl);
         EXECUTE format(
-            'CREATE POLICY "Authenticated users access" ON public.%I FOR ALL TO authenticated USING ((SELECT auth.uid()) IS NOT NULL) WITH CHECK ((SELECT auth.uid()) IS NOT NULL);',
+            'CREATE POLICY "Authorized gym users access" ON public.%I FOR ALL TO authenticated USING ((SELECT public.is_authorized_gym_user())) WITH CHECK ((SELECT public.is_authorized_gym_user()));',
             tbl
         );
     END LOOP;

@@ -13,13 +13,22 @@ Este sistema funciona em **Modo Local (Offline-First)** imediatamente após o de
 
 ---
 
-## Passo 2 — Criar o Login de Acesso da Academia
+## Passo 2 — Criar o Login de Acesso da Academia (E-mail ou Google)
 
+### Opção A: E-mail e Senha (sem precisar confirmar e-mail)
 1. No painel do Supabase, acesse **Authentication** → **Users**.
 2. Clique em **Add user** → **Create new user**.
 3. Informe o **E-mail** e a **Senha** que você e sua equipe usarão para entrar pelo computador e pelo celular, e marque **Auto Confirm User**.
 
-> Dica: Caso prefira usar sem confirmação de e-mail ao cadastrar novos usuários pelo app, desative *Confirm email* em **Authentication → Providers → Email**.
+### Opção B: Login com Google (Gratuito)
+1. No **Google Cloud Console**, crie um OAuth Client ID (*Aplicativo da Web*) com o URI de redirecionamento do Supabase:
+   `https://<SEU-PROJETO>.supabase.co/auth/v1/callback`
+2. No **Supabase** → **Authentication** → **Sign In / Providers** → **Google**, ative e informe **Client ID** e **Client Secret**.
+3. Em **Authentication** → **URL Configuration**, defina a **Site URL** (ex.: `https://seu-site.vercel.app`) e adicione em **Redirect URLs** `https://seu-site.vercel.app/**`.
+4. **Segurança obrigatória:** cadastre o Gmail autorizado na tabela `allowed_users` (no **Table Editor** ou SQL Editor):
+   ```sql
+   INSERT INTO public.allowed_users (email, role) VALUES ('gmail-do-dono@gmail.com', 'admin');
+   ```
 
 ---
 

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { EntityTable } from 'dexie';
 import type { RealtimeChannel, Session } from '@supabase/supabase-js';
 import { db } from './db';
-import { getSupabaseClient, isSupabaseConfigured } from './supabase';
+import { getSupabaseClient, getSupabaseConfig, isSupabaseConfigured } from './supabase';
 import {
     Attendance,
     CloudSyncState,
@@ -433,6 +433,92 @@ export async function signUpCloud(email: string, password: string): Promise<{ er
     return { needsConfirmation: !data.session };
 }
 
+export async function checkGoogleProviderEnabled(): Promise<boolean> {
+    const cfg = getSupabaseConfig();
+    if (!cfg) return false;
+    try {
+        const res = await fetch(`${cfg.url.replace(/\/$/, '')}/auth/v1/settings`, {
+            headers: { apikey: cfg.anonKey },
+        });
+        if (!res.ok) return false;
+        const json = await res.json();
+        return Boolean(json?.external?.google);
+    } catch {
+        return false;
+    }
+}
+
+export async function signInWithGoogle(): Promise<{ error?: string }> {
+    const supabase = getSupabaseClient();
+    if (!supabase) {
+        return { error: 'Supabase não está configurado.' };
+    }
+
+    const googleEnabled = await checkGoogleProviderEnabled();
+    if (!googleEnabled) {
+        return {
+            error: 'O login com Google ainda precisa ser ativado no painel do Supabase (Authentication > Sign In / Providers > Google).',
+        };
+    }
+
+    const redirectTo =
+        typeof window !== 'undefined' ? `${window.location.origin}/` : undefined;
+
+    const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+            redirectTo,
+            queryParams: {
+                prompt: 'select_account',
+            },
+        },
+    });
+
+    if (error) {
+        return { error: error.message };
+    }
+    return {};
+}
+
+export async function verifyAuthorizedCloudUser(): Promise<{
+    authorized: boolean;
+    email?: string;
+    reason?: 'no_session' | 'unauthorized';
+}> {
+    const supabase = getSupabaseClient();
+    if (!supabase) return { authorized: false, reason: 'no_session' };
+
+    const { data: sessionData } = await supabase.auth.getSession();
+    const session = sessionData.session;
+    if (!session) return { authorized: false, reason: 'no_session' };
+
+    const userEmail = session.user?.email;
+    const { data, error } = await supabase
+        .from('allowed_users')
+        .select('email')
+        .maybeSingle();
+
+    if (error) {
+        // Caso o schema antigo sem a tabela allowed_users ainda esteja em uso, mantém compatibilidade
+        const msg = (error.message || '').toLowerCase();
+        if (error.code === 'PGRST205' || error.code === '42P01' || msg.includes('allowed_users')) {
+            return { authorized: true, email: userEmail };
+        }
+        if (error.code === '42501') {
+            await signOutCloud();
+            return { authorized: false, email: userEmail, reason: 'unauthorized' };
+        }
+        return { authorized: true, email: userEmail };
+    }
+
+    if (!data?.email) {
+        await signOutCloud();
+        return { authorized: false, email: userEmail, reason: 'unauthorized' };
+    }
+
+    return { authorized: true, email: userEmail };
+}
+
 export async function signOutCloud(): Promise<void> {
     const supabase = getSupabaseClient();
     stopRealtimeSync();
@@ -562,6 +648,16 @@ export async function syncAll(): Promise<boolean> {
         const session = sessionData.session;
         if (!session) {
             notifyStatus({ state: 'unauthenticated', userEmail: null });
+            return false;
+        }
+
+        const authCheck = await verifyAuthorizedCloudUser();
+        if (!authCheck.authorized) {
+            notifyStatus({
+                state: 'unauthenticated',
+                userEmail: null,
+                lastError: `E-mail ${authCheck.email || ''} não autorizado para acessar a academia.`,
+            });
             return false;
         }
 

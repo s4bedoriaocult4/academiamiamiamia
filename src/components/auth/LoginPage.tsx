@@ -11,14 +11,22 @@ import {
 } from 'lucide-react';
 import { db } from '../../services/db';
 import { isSupabaseConfigured, saveLocalSupabaseConfig } from '../../services/supabase';
-import { signInCloud, signUpCloud, syncAll } from '../../services/syncService';
+import {
+    signInCloud,
+    signInWithGoogle,
+    signUpCloud,
+    syncAll,
+    verifyAuthorizedCloudUser,
+} from '../../services/syncService';
 import { BrandMark } from '../common/BrandMark';
+import { GoogleSignInButton } from '../common/GoogleSignInButton';
 
 interface LoginPageProps {
     onLoginSuccess: () => void;
+    initialError?: string;
 }
 
-export function LoginPage({ onLoginSuccess }: LoginPageProps) {
+export function LoginPage({ onLoginSuccess, initialError = '' }: LoginPageProps) {
     const cloudConfigured = isSupabaseConfigured();
 
     const [mode, setMode] = useState<'cloud' | 'local'>(cloudConfigured ? 'cloud' : 'local');
@@ -42,8 +50,15 @@ export function LoginPage({ onLoginSuccess }: LoginPageProps) {
     const [quickKey, setQuickKey] = useState('');
 
     const [showPassword, setShowPassword] = useState(false);
-    const [error, setError] = useState('');
+    const [error, setError] = useState(initialError);
     const [isLoading, setIsLoading] = useState(false);
+    const [googleLoading, setGoogleLoading] = useState(false);
+
+    useEffect(() => {
+        if (initialError) {
+            setError(initialError);
+        }
+    }, [initialError]);
 
     useEffect(() => {
         const loadBrandingAndAuth = async () => {
@@ -121,6 +136,14 @@ export function LoginPage({ onLoginSuccess }: LoginPageProps) {
                     return;
                 }
             }
+            const check = await verifyAuthorizedCloudUser();
+            if (!check.authorized) {
+                setError(
+                    `O e-mail ${check.email || 'informado'} ainda não está autorizado na tabela allowed_users do Supabase.`
+                );
+                setIsLoading(false);
+                return;
+            }
             if (rememberMe) {
                 localStorage.setItem('gym_remembered', 'true');
             }
@@ -129,6 +152,22 @@ export function LoginPage({ onLoginSuccess }: LoginPageProps) {
         } catch {
             setError('Não foi possível conectar ao servidor. Verifique sua internet.');
             setIsLoading(false);
+        }
+    };
+
+    const handleGoogleSignIn = async () => {
+        setError('');
+        setInfoMsg('');
+        setGoogleLoading(true);
+        try {
+            const res = await signInWithGoogle();
+            if (res.error) {
+                setError(res.error);
+            }
+        } catch {
+            setError('Não foi possível iniciar o login com Google.');
+        } finally {
+            setGoogleLoading(false);
         }
     };
 
@@ -205,6 +244,20 @@ export function LoginPage({ onLoginSuccess }: LoginPageProps) {
                                 <p className="text-xs text-slate-500 dark:text-slate-400">
                                     Seus alunos e caixa ficam sincronizados entre PC e celular.
                                 </p>
+                            </div>
+
+                            <GoogleSignInButton
+                                onClick={handleGoogleSignIn}
+                                loading={googleLoading}
+                                disabled={isLoading}
+                            />
+
+                            <div className="relative flex items-center py-0.5">
+                                <div className="flex-grow border-t border-slate-200 dark:border-slate-800" />
+                                <span className="mx-3 text-[11px] font-medium uppercase tracking-wider text-slate-400">
+                                    ou com e-mail e senha
+                                </span>
+                                <div className="flex-grow border-t border-slate-200 dark:border-slate-800" />
                             </div>
 
                             <div>
