@@ -1,210 +1,425 @@
-import { useState, useEffect } from 'react';
-import { Lock, ShieldCheck, Eye, EyeOff, Sparkles } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import {
+    Lock,
+    Eye,
+    EyeOff,
+    Cloud,
+    ArrowRight,
+    CheckCircle2,
+    ShieldCheck,
+    WifiOff,
+} from 'lucide-react';
 import { db } from '../../services/db';
+import { isSupabaseConfigured, saveLocalSupabaseConfig } from '../../services/supabase';
+import { signInCloud, signUpCloud, syncAll } from '../../services/syncService';
+import { BrandMark } from '../common/BrandMark';
 
 interface LoginPageProps {
-    onLogin: () => void;
+    onLoginSuccess: () => void;
 }
 
-export function LoginPage({ onLogin }: LoginPageProps) {
-    const [password, setPassword] = useState('');
-    const [confirmPassword, setConfirmPassword] = useState('');
-    const [isFirstTime, setIsFirstTime] = useState(false);
-    const [error, setError] = useState('');
-    const [rememberMe, setRememberMe] = useState(false);
-    const [showPassword, setShowPassword] = useState(false);
-    const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-    const [isLoading, setIsLoading] = useState(false);
+export function LoginPage({ onLoginSuccess }: LoginPageProps) {
+    const cloudConfigured = isSupabaseConfigured();
+
+    const [mode, setMode] = useState<'cloud' | 'local'>(cloudConfigured ? 'cloud' : 'local');
     const [gymName, setGymName] = useState('RESISTÊNCIA MUAY THAI');
     const [gymLogo, setGymLogo] = useState('🥊');
 
+    // Estado Local (PIN / Senha local)
+    const [storedPassword, setStoredPassword] = useState<string>('admin123');
+    const [localPassword, setLocalPassword] = useState('');
+    const [rememberMe, setRememberMe] = useState(true);
+
+    // Estado Nuvem (Supabase Auth)
+    const [email, setEmail] = useState('');
+    const [cloudPassword, setCloudPassword] = useState('');
+    const [isSignUpMode, setIsSignUpMode] = useState(false);
+    const [infoMsg, setInfoMsg] = useState('');
+
+    // Conexão rápida opcional direto no login
+    const [showQuickCloudSetup, setShowQuickCloudSetup] = useState(false);
+    const [quickUrl, setQuickUrl] = useState('');
+    const [quickKey, setQuickKey] = useState('');
+
+    const [showPassword, setShowPassword] = useState(false);
+    const [error, setError] = useState('');
+    const [isLoading, setIsLoading] = useState(false);
+
     useEffect(() => {
-        const checkPasswordAndIdentity = async () => {
-            const savedPassword = await db.settings.get('appPassword');
-            if (!savedPassword?.value) {
-                setIsFirstTime(true);
-            }
-            const savedGymName = await db.settings.get('gymName');
-            if (savedGymName?.value) {
-                setGymName(savedGymName.value);
-            }
-            const savedGymLogo = await db.settings.get('gymLogo');
-            if (savedGymLogo?.value) {
-                setGymLogo(savedGymLogo.value);
+        const loadBrandingAndAuth = async () => {
+            try {
+                const [passSetting, nameSetting, logoSetting] = await Promise.all([
+                    db.settings.get('appPassword'),
+                    db.settings.get('gymName'),
+                    db.settings.get('gymLogo'),
+                ]);
+
+                if (passSetting?.value) setStoredPassword(String(passSetting.value));
+                if (nameSetting?.value) setGymName(String(nameSetting.value));
+                if (logoSetting?.value) setGymLogo(String(logoSetting.value));
+            } catch {
+                // Usa padrões iniciais
             }
         };
-        checkPasswordAndIdentity();
+        loadBrandingAndAuth();
     }, []);
 
-    const handleSubmit = async (e: React.FormEvent) => {
+    const handleLocalSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setError('');
         setIsLoading(true);
 
-        // Simular pequeno delay para feedback visual
-        await new Promise(resolve => setTimeout(resolve, 300));
-
-        if (isFirstTime) {
-            if (!password || password.length < 4) {
-                setError('A senha deve ter pelo menos 4 caracteres');
-                setIsLoading(false);
-                return;
+        try {
+            if (localPassword === storedPassword) {
+                if (rememberMe) {
+                    localStorage.setItem('gym_remembered', 'true');
+                }
+                onLoginSuccess();
+            } else {
+                setError('Senha incorreta. Tente novamente.');
+                setLocalPassword('');
             }
-            if (password !== confirmPassword) {
-                setError('As senhas não coincidem');
-                setIsLoading(false);
-                return;
-            }
-            await db.settings.put({ key: 'appPassword', value: password });
-            if (rememberMe) {
-                sessionStorage.setItem('gym_remembered', 'true');
-            }
-            onLogin();
-        } else {
-            const savedPassword = await db.settings.get('appPassword');
-            if (!savedPassword?.value) {
-                setError('Erro: senha não encontrada. Recarregue a página.');
-                setIsLoading(false);
-                return;
-            }
-            if (password !== savedPassword.value) {
-                setError('Senha incorreta');
-                setIsLoading(false);
-                return;
-            }
-            if (rememberMe) {
-                sessionStorage.setItem('gym_remembered', 'true');
-            }
-            onLogin();
+        } finally {
+            setIsLoading(false);
         }
     };
 
-    return (
-        <div className="login-page">
-            {/* Animated Background */}
-            <div className="login-bg">
-                <div className="login-bg-shape login-bg-shape-1"></div>
-                <div className="login-bg-shape login-bg-shape-2"></div>
-                <div className="login-bg-shape login-bg-shape-3"></div>
-            </div>
+    const handleCloudSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setError('');
+        setInfoMsg('');
 
-            {/* Login Card */}
-            <div className="login-card">
-                {/* Logo Section */}
-                <div className="login-header">
-                    <div className="login-logo">
-                        <div className="login-logo-icon">
-                            {gymLogo.startsWith('data:image') ? (
-                                <img src={gymLogo} className="logo-img w-16 h-16 object-contain rounded-xl" alt="Logo" />
-                            ) : (
-                                <span className="login-emoji">{gymLogo}</span>
-                            )}
-                            <ShieldCheck size={24} className="login-shield" />
-                        </div>
+        if (!email.trim() || !cloudPassword) {
+            setError('Informe seu e-mail e senha.');
+            return;
+        }
+        if (isSignUpMode && cloudPassword.length < 6) {
+            setError('Para criar conta na nuvem, use uma senha com pelo menos 6 caracteres.');
+            return;
+        }
+
+        setIsLoading(true);
+        try {
+            if (isSignUpMode) {
+                const res = await signUpCloud(email.trim(), cloudPassword);
+                if (res.error) {
+                    setError(res.error);
+                    setIsLoading(false);
+                    return;
+                }
+                if (res.needsConfirmation) {
+                    setInfoMsg('Conta criada! Verifique seu e-mail para confirmar o cadastro e depois faça login (ou entre pela aba "Senha Local").');
+                    setIsSignUpMode(false);
+                    setIsLoading(false);
+                    return;
+                }
+            } else {
+                const res = await signInCloud(email.trim(), cloudPassword);
+                if (res.error) {
+                    setError(res.error);
+                    setIsLoading(false);
+                    return;
+                }
+            }
+            if (rememberMe) {
+                localStorage.setItem('gym_remembered', 'true');
+            }
+            await syncAll();
+            onLoginSuccess();
+        } catch {
+            setError('Não foi possível conectar ao servidor. Verifique sua internet.');
+            setIsLoading(false);
+        }
+    };
+
+    const handleSaveQuickCloud = () => {
+        if (!quickUrl.trim().startsWith('https://') || !quickKey.trim()) {
+            setError('Informe a URL (https://...) e a Chave Anon do Supabase.');
+            return;
+        }
+        saveLocalSupabaseConfig(quickUrl.trim(), quickKey.trim());
+        setShowQuickCloudSetup(false);
+        setMode('cloud');
+        setError('');
+    };
+
+    return (
+        <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col items-center justify-center p-4">
+            <div className="w-full max-w-md space-y-6">
+                {/* Identidade */}
+                <div className="flex flex-col items-center text-center space-y-3">
+                    <BrandMark gymName={gymName} gymLogo={gymLogo} size="lg" showName={false} />
+                    <div>
+                        <h1 className="font-display text-2xl font-bold text-slate-900 dark:text-white tracking-tight">
+                            {gymName}
+                        </h1>
+                        <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+                            Sistema de Gestão Simples &amp; Integrado
+                        </p>
                     </div>
-                    <h1 className="login-title">{gymName}</h1>
-                    <p className="login-subtitle">
-                        {isFirstTime ? (
-                            <>
-                                <Sparkles size={14} style={{ display: 'inline', marginRight: '6px' }} />
-                                Bem-vindo! Configure sua senha de acesso
-                            </>
-                        ) : (
-                            'Digite sua senha para continuar'
-                        )}
-                    </p>
                 </div>
 
-                {/* Form */}
-                <form onSubmit={handleSubmit} className="login-form">
-                    <div className="login-form-group">
-                        <label className="login-label">
-                            {isFirstTime ? 'Criar Senha' : 'Senha'}
-                        </label>
-                        <div className="login-input-wrapper">
-                            <Lock size={18} className="login-input-icon" />
-                            <input
-                                type={showPassword ? 'text' : 'password'}
-                                value={password}
-                                onChange={(e) => setPassword(e.target.value)}
-                                className="login-input"
-                                placeholder={isFirstTime ? 'Mínimo 4 caracteres' : '••••••••'}
-                                autoFocus
-                            />
+                {/* Card Principal */}
+                <div className="card p-6 sm:p-7 space-y-5 shadow-lg">
+                    {cloudConfigured && (
+                        <div className="grid grid-cols-2 gap-1.5 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl">
                             <button
                                 type="button"
-                                className="login-toggle-password"
-                                onClick={() => setShowPassword(!showPassword)}
+                                onClick={() => {
+                                    setMode('cloud');
+                                    setError('');
+                                }}
+                                className={`py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${
+                                    mode === 'cloud'
+                                        ? 'bg-white dark:bg-slate-900 text-rose-600 shadow-sm'
+                                        : 'text-slate-500 dark:text-slate-400'
+                                }`}
                             >
-                                {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                                <Cloud className="w-3.5 h-3.5" />
+                                Acesso Nuvem
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setMode('local');
+                                    setError('');
+                                }}
+                                className={`py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${
+                                    mode === 'local'
+                                        ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-sm'
+                                        : 'text-slate-500 dark:text-slate-400'
+                                }`}
+                            >
+                                <WifiOff className="w-3.5 h-3.5" />
+                                Senha Local
                             </button>
                         </div>
-                    </div>
+                    )}
 
-                    {isFirstTime && (
-                        <div className="login-form-group">
-                            <label className="login-label">Confirmar Senha</label>
-                            <div className="login-input-wrapper">
-                                <Lock size={18} className="login-input-icon" />
+                    {mode === 'cloud' && cloudConfigured ? (
+                        <form onSubmit={handleCloudSubmit} className="space-y-4">
+                            <div className="space-y-1">
+                                <h2 className="font-bold text-slate-900 dark:text-white text-base">
+                                    Entrar com conta sincronizada
+                                </h2>
+                                <p className="text-xs text-slate-500 dark:text-slate-400">
+                                    Seus alunos e caixa ficam sincronizados entre PC e celular.
+                                </p>
+                            </div>
+
+                            <div>
+                                <label className="label" htmlFor="login-email">
+                                    E-mail
+                                </label>
                                 <input
-                                    type={showConfirmPassword ? 'text' : 'password'}
-                                    value={confirmPassword}
-                                    onChange={(e) => setConfirmPassword(e.target.value)}
-                                    className="login-input"
-                                    placeholder="Repita a senha"
+                                    id="login-email"
+                                    type="email"
+                                    required
+                                    autoComplete="email"
+                                    placeholder="seu@email.com"
+                                    value={email}
+                                    onChange={(e) => setEmail(e.target.value)}
+                                    className="input"
                                 />
+                            </div>
+
+                            <div>
+                                <label className="label" htmlFor="login-cloud-pass">
+                                    Senha
+                                </label>
+                                <div className="relative">
+                                    <input
+                                        id="login-cloud-pass"
+                                        type={showPassword ? 'text' : 'password'}
+                                        required
+                                        autoComplete="current-password"
+                                        placeholder="••••••••"
+                                        value={cloudPassword}
+                                        onChange={(e) => setCloudPassword(e.target.value)}
+                                        className="input pr-11"
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowPassword(!showPassword)}
+                                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                                    >
+                                        {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                                    </button>
+                                </div>
+                            </div>
+
+                            {error && (
+                                <div className="p-3 rounded-xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 text-xs font-medium text-red-700 dark:text-red-300">
+                                    {error}
+                                </div>
+                            )}
+
+                            {infoMsg && (
+                                <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-xs font-medium text-emerald-700 dark:text-emerald-300">
+                                    {infoMsg}
+                                </div>
+                            )}
+
+                            <button
+                                type="submit"
+                                disabled={isLoading}
+                                className="btn btn-primary w-full py-3"
+                            >
+                                {isLoading
+                                    ? 'Conectando...'
+                                    : isSignUpMode
+                                        ? 'Criar Conta e Sincronizar'
+                                        : 'Entrar e Sincronizar'}
+                                <ArrowRight className="w-4 h-4" />
+                            </button>
+
+                            <div className="flex items-center justify-between text-xs pt-1">
                                 <button
                                     type="button"
-                                    className="login-toggle-password"
-                                    onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                                    onClick={() => {
+                                        setIsSignUpMode((v) => !v);
+                                        setError('');
+                                        setInfoMsg('');
+                                    }}
+                                    className="font-semibold text-rose-600 hover:underline dark:text-rose-400"
                                 >
-                                    {showConfirmPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                                    {isSignUpMode
+                                        ? 'Já tenho conta → Entrar'
+                                        : 'Primeiro acesso? Criar conta na nuvem'}
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setMode('local')}
+                                    className="font-semibold text-slate-500 hover:text-slate-700 dark:text-slate-400"
+                                >
+                                    Usar PIN local ({storedPassword === 'admin123' ? 'admin123' : '••••'})
                                 </button>
                             </div>
-                        </div>
+                        </form>
+                    ) : (
+                        <form onSubmit={handleLocalSubmit} className="space-y-4">
+                            <div className="flex items-center gap-2 text-slate-800 dark:text-slate-100 font-bold text-base">
+                                <Lock className="w-4 h-4 text-rose-600" />
+                                <span>Desbloquear Sistema</span>
+                            </div>
+
+                            <div>
+                                <label className="label" htmlFor="login-local-pass">
+                                    Senha de Acesso Local
+                                </label>
+                                <div className="relative">
+                                    <input
+                                        id="login-local-pass"
+                                        type={showPassword ? 'text' : 'password'}
+                                        required
+                                        autoFocus
+                                        placeholder="Digite a senha do aparelho"
+                                        value={localPassword}
+                                        onChange={(e) => setLocalPassword(e.target.value)}
+                                        className="input pr-11"
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowPassword(!showPassword)}
+                                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                                    >
+                                        {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                                    </button>
+                                </div>
+                            </div>
+
+                            <label className="flex items-center gap-2.5 text-sm text-slate-600 dark:text-slate-300 cursor-pointer select-none">
+                                <input
+                                    type="checkbox"
+                                    checked={rememberMe}
+                                    onChange={(e) => setRememberMe(e.target.checked)}
+                                    className="w-4 h-4 rounded border-slate-300 text-rose-600 focus:ring-rose-500"
+                                />
+                                <span>Manter conectado neste aparelho</span>
+                            </label>
+
+                            {error && (
+                                <div className="p-3 rounded-xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 text-xs font-medium text-red-700 dark:text-red-300">
+                                    {error}
+                                </div>
+                            )}
+
+                            <button
+                                type="submit"
+                                disabled={isLoading}
+                                className="btn btn-primary w-full py-3"
+                            >
+                                Entrar no Sistema
+                                <ArrowRight className="w-4 h-4" />
+                            </button>
+
+                            {storedPassword === 'admin123' && (
+                                <p className="text-center text-xs text-slate-500 dark:text-slate-400">
+                                    Senha padrão inicial: <strong className="font-mono">admin123</strong> (você pode alterar em Configurações)
+                                </p>
+                            )}
+                        </form>
                     )}
 
-                    {error && (
-                        <div className="login-error">
-                            <span>⚠️</span>
-                            {error}
+                    {/* Conexão rápida opcional */}
+                    {!cloudConfigured && (
+                        <div className="pt-3 border-t border-slate-100 dark:border-slate-800">
+                            {!showQuickCloudSetup ? (
+                                <button
+                                    type="button"
+                                    onClick={() => setShowQuickCloudSetup(true)}
+                                    className="w-full text-xs font-semibold text-slate-500 hover:text-rose-600 dark:text-slate-400 flex items-center justify-center gap-1.5"
+                                >
+                                    <Cloud className="w-3.5 h-3.5" />
+                                    Quer sincronizar com o celular? Conectar Supabase aqui
+                                </button>
+                            ) : (
+                                <div className="space-y-2.5 bg-slate-50 dark:bg-slate-800/60 p-3.5 rounded-xl border border-slate-200 dark:border-slate-700">
+                                    <div className="text-xs font-bold text-slate-800 dark:text-slate-100">
+                                        Conectar Projeto Supabase
+                                    </div>
+                                    <input
+                                        type="url"
+                                        placeholder="https://xxxxx.supabase.co"
+                                        value={quickUrl}
+                                        onChange={(e) => setQuickUrl(e.target.value)}
+                                        className="input text-xs py-2"
+                                    />
+                                    <input
+                                        type="text"
+                                        placeholder="Anon Public Key"
+                                        value={quickKey}
+                                        onChange={(e) => setQuickKey(e.target.value)}
+                                        className="input text-xs py-2 font-mono"
+                                    />
+                                    <div className="flex gap-2 justify-end">
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowQuickCloudSetup(false)}
+                                            className="btn btn-ghost btn-sm"
+                                        >
+                                            Cancelar
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={handleSaveQuickCloud}
+                                            className="btn btn-primary btn-sm"
+                                        >
+                                            <CheckCircle2 className="w-3.5 h-3.5" />
+                                            Salvar
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     )}
+                </div>
 
-                    <label className="login-checkbox">
-                        <input
-                            type="checkbox"
-                            checked={rememberMe}
-                            onChange={(e) => setRememberMe(e.target.checked)}
-                        />
-                        <span className="login-checkbox-custom"></span>
-                        <span className="login-checkbox-label">Lembrar-me nesta sessão</span>
-                    </label>
-
-                    <button
-                        type="submit"
-                        className={`login-button ${isLoading ? 'loading' : ''}`}
-                        disabled={isLoading}
-                    >
-                        {isLoading ? (
-                            <span className="login-button-spinner"></span>
-                        ) : (
-                            <>
-                                {isFirstTime ? 'Criar Conta' : 'Entrar'}
-                                <span className="login-button-arrow">→</span>
-                            </>
-                        )}
-                    </button>
-                </form>
-
-                {/* Footer */}
-                <div className="login-footer">
-                    <div className="login-footer-icon">🔒</div>
-                    <p>Seus dados estão armazenados localmente</p>
-                    <p>com segurança no seu navegador</p>
+                <div className="flex items-center justify-center gap-2 text-xs text-slate-400 dark:text-slate-500">
+                    <ShieldCheck className="w-4 h-4" />
+                    <span>Funciona offline com salvamento automático seguro</span>
                 </div>
             </div>
         </div>
     );
 }
-

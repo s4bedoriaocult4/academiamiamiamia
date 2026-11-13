@@ -1,195 +1,279 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
-    LayoutDashboard, Users, UserCheck, DollarSign,
-    Settings, Moon, Sun, Menu, X, Dumbbell, HelpCircle
-} from 'lucide-react';
-
-// Services & Hooks
-import { useDbInit, useSettings } from './hooks/useGymStore';
+    useDbInit,
+    usePayments,
+    usePersonalPlans,
+    usePlans,
+    useSettings,
+    useStudents,
+} from './hooks/useGymStore';
+import { Payment, Student } from './types';
+import { getStudentPaymentStatus } from './utils/dateUtils';
+import { saveSetting } from './services/dataAccess';
+import { checkAndCloseMonth } from './services/MonthlyHistoryService';
+import { getSupabaseClient, isSupabaseConfigured } from './services/supabase';
+import {
+    pushBatchRecords,
+    refreshSyncStatusFromEnvironment,
+    signOutCloud,
+    startRealtimeSync,
+    stopRealtimeSync,
+    syncAll,
+} from './services/syncService';
 import { db } from './services/db';
-
-// Components
+import { AppShell, NavTab } from './components/layout/AppShell';
+import { LoginPage } from './components/auth/LoginPage';
 import { Dashboard } from './components/dashboard/Dashboard';
 import { StudentList } from './components/students/StudentList';
-import { PaymentList } from './components/payments/PaymentList';
-import { AttendanceManager } from './components/attendance/AttendanceManager';
-import { ExpenseList } from './components/financial/ExpenseList';
-import { Settings as SettingsPage } from './components/settings/Settings';
-import { LoginPage } from './components/auth/LoginPage';
 import { PersonalDashboard } from './components/students/PersonalDashboard';
+import { FinancialHub } from './components/financial/FinancialHub';
+import { AttendanceManager } from './components/attendance/AttendanceManager';
+import { Settings } from './components/settings/Settings';
 import { HelpPage } from './components/help/HelpPage';
+import { StudentModal } from './components/students/StudentModal';
+import { PaymentModal } from './components/payments/PaymentModal';
+import { LoadingOverlay } from './components/UI';
 
-
-function App() {
+export default function App() {
     const isDbReady = useDbInit();
+    const students = useStudents();
+    const payments = usePayments();
+    const plans = usePlans();
+    const personalPlans = usePersonalPlans();
     const settings = useSettings();
 
-    const gymName = settings.find(s => s.key === 'gymName')?.value || 'RESISTÊNCIA MUAY THAI';
-    const gymLogo = settings.find(s => s.key === 'gymLogo')?.value || '🥊';
-
-    const [activeTab, setActiveTab] = useState('dashboard');
-    const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
     const [isAuthenticated, setIsAuthenticated] = useState(false);
-
-    // Dark Mode Logic
+    const [checkingSession, setCheckingSession] = useState(true);
+    const [currentTab, setCurrentTab] = useState<NavTab>('dashboard');
     const [darkMode, setDarkMode] = useState(false);
 
-    useEffect(() => {
-        const loadTheme = async () => {
-            const saved = await db.settings.get('darkMode');
-            if (saved?.value) {
-                setDarkMode(true);
-                document.body.classList.add('dark-mode');
-            }
-        };
-        if (isDbReady) loadTheme();
-    }, [isDbReady]);
+    // Modais globais rápidos (acessíveis do Dashboard, Alunos, Personal ou Caixa)
+    const [quickStudentModalOpen, setQuickStudentModalOpen] = useState(false);
+    const [paymentModalOpen, setPaymentModalOpen] = useState(false);
+    const [paymentToEdit, setPaymentToEdit] = useState<Payment | null>(null);
+    const [paymentStudent, setPaymentStudent] = useState<Student | null>(null);
+    const [paymentInitialType, setPaymentInitialType] = useState<'pagamento' | 'personal' | 'entrada'>('pagamento');
 
-    // Verificar autenticação - sempre mostrar screenlock
+    const gymName = useMemo(
+        () => String(settings.find((s) => s.key === 'gymName')?.value || 'RESISTÊNCIA MUAY THAI'),
+        [settings]
+    );
+    const gymLogo = useMemo(
+        () => String(settings.find((s) => s.key === 'gymLogo')?.value || '🥊'),
+        [settings]
+    );
+
+    const overdueCount = useMemo(
+        () =>
+            students.filter(
+                (s) => s.status === 'ativo' && getStudentPaymentStatus(s).status === 'overdue'
+            ).length,
+        [students]
+    );
+
+    // Tema claro / escuro via classe 'dark' no <html>
+    useEffect(() => {
+        const storedDark = settings.find((s) => s.key === 'darkMode')?.value;
+        if (storedDark !== undefined) {
+            setDarkMode(Boolean(storedDark));
+        }
+    }, [settings]);
+
+    useEffect(() => {
+        const root = document.documentElement;
+        if (darkMode) {
+            root.classList.add('dark');
+        } else {
+            root.classList.remove('dark');
+        }
+    }, [darkMode]);
+
+    // Verificação inicial de sessão (Nuvem Supabase ou Remembered Local)
     useEffect(() => {
         if (!isDbReady) return;
 
-        const remembered = sessionStorage.getItem('gym_remembered');
-        // Só permitir acesso se estiver lembrado na sessão
-        if (remembered === 'true') {
-            setIsAuthenticated(true);
-        }
+        let unsubAuth: (() => void) | undefined;
+
+        const initSession = async () => {
+            const remembered = localStorage.getItem('gym_remembered') === 'true';
+            const supabase = getSupabaseClient();
+
+            if (supabase) {
+                const { data } = await supabase.auth.getSession();
+                if (data.session) {
+                    setIsAuthenticated(true);
+                    syncAll().then(() => startRealtimeSync());
+                } else if (remembered && !navigator.onLine) {
+                    // Permite acesso offline caso já autenticado anteriormente no aparelho
+                    setIsAuthenticated(true);
+                }
+
+                const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+                    if (session) {
+                        setIsAuthenticated(true);
+                        syncAll().then(() => startRealtimeSync());
+                    } else {
+                        stopRealtimeSync();
+                        refreshSyncStatusFromEnvironment();
+                    }
+                });
+                unsubAuth = () => listener.subscription.unsubscribe();
+            } else if (remembered) {
+                setIsAuthenticated(true);
+            }
+
+            setCheckingSession(false);
+        };
+
+        initSession();
+        return () => {
+            unsubAuth?.();
+            stopRealtimeSync();
+        };
     }, [isDbReady]);
 
-    const handleLogin = () => {
-        setIsAuthenticated(true);
+    // Sincronizar automaticamente ao recuperar internet e reparar fechamentos mensais no início
+    useEffect(() => {
+        if (!isDbReady || !isAuthenticated) return;
+
+        checkAndCloseMonth()
+            .then(async (updated) => {
+                if (updated && isSupabaseConfigured()) {
+                    const snaps = await db.monthlySnapshots.toArray();
+                    pushBatchRecords('monthlySnapshots', snaps).catch(() => {});
+                }
+            })
+            .catch(() => {});
+
+        const handleOnline = () => {
+            refreshSyncStatusFromEnvironment();
+            syncAll();
+        };
+        const handleOffline = () => {
+            refreshSyncStatusFromEnvironment();
+        };
+
+        window.addEventListener('online', handleOnline);
+        window.addEventListener('offline', handleOffline);
+        return () => {
+            window.removeEventListener('online', handleOnline);
+            window.removeEventListener('offline', handleOffline);
+        };
+    }, [isDbReady, isAuthenticated]);
+
+    const handleToggleDarkMode = async () => {
+        const next = !darkMode;
+        setDarkMode(next);
+        await saveSetting('darkMode', next);
     };
 
-    const toggleDarkMode = async () => {
-        const newToken = !darkMode;
-        setDarkMode(newToken);
-        if (newToken) document.body.classList.add('dark-mode');
-        else document.body.classList.remove('dark-mode');
-        await db.settings.put({ key: 'darkMode', value: newToken });
-    };
-
-    if (!isDbReady) {
-        return (
-            <div className="flex items-center justify-center h-screen bg-gray-50">
-                <div className="text-center">
-                    <div className="spinner mb-4"></div>
-                    <p className="text-lg font-medium text-gray-600">Carregando sistema...</p>
-                    <p className="text-sm text-gray-400">Migrando dados para banco seguro</p>
-                </div>
-            </div>
-        );
-    }
-
-    // Se não autenticado, mostrar screenlock
-    if (!isAuthenticated) {
-        return <LoginPage onLogin={handleLogin} />;
-    }
-
-    const renderContent = () => {
-        switch (activeTab) {
-            case 'dashboard': return <Dashboard />;
-            case 'students': return <StudentList />;
-            case 'personal-dashboard': return <PersonalDashboard />;
-            case 'payments': return <PaymentList />;
-            case 'attendance': return <AttendanceManager />;
-            case 'financial': return <ExpenseList />;
-            case 'settings': return <SettingsPage />;
-            case 'help': return <HelpPage />;
-            default: return <Dashboard />;
+    const handleLockApp = async () => {
+        localStorage.removeItem('gym_remembered');
+        if (isSupabaseConfigured()) {
+            await signOutCloud();
         }
+        setIsAuthenticated(false);
     };
 
-    const NavItem = ({ id, icon: Icon, label }: any) => (
-        <button
-            onClick={() => { setActiveTab(id); setIsMobileMenuOpen(false); }}
-            className={`nav-item ${activeTab === id ? 'active' : ''}`}
-        >
-            <Icon size={20} />
-            <span>{label}</span>
-        </button>
-    );
+    const openPaymentModal = (
+        student?: Student | null,
+        type: 'pagamento' | 'personal' | 'entrada' = 'pagamento',
+        editPayment?: Payment | null
+    ) => {
+        setPaymentStudent(student || null);
+        setPaymentInitialType(type);
+        setPaymentToEdit(editPayment || null);
+        setPaymentModalOpen(true);
+    };
+
+    if (!isDbReady || checkingSession) {
+        return <LoadingOverlay message="Preparando sistema da academia..." />;
+    }
+
+    if (!isAuthenticated) {
+        return <LoginPage onLoginSuccess={() => setIsAuthenticated(true)} />;
+    }
 
     return (
-        <div className="app-container">
+        <>
+            <AppShell
+                currentTab={currentTab}
+                onSelectTab={setCurrentTab}
+                gymName={gymName}
+                gymLogo={gymLogo}
+                darkMode={darkMode}
+                onToggleDarkMode={handleToggleDarkMode}
+                onLockApp={handleLockApp}
+                overdueCount={overdueCount}
+            >
+                {currentTab === 'dashboard' && (
+                    <Dashboard
+                        gymName={gymName}
+                        onNavigate={setCurrentTab}
+                        onQuickNewStudent={() => setQuickStudentModalOpen(true)}
+                        onQuickPayment={(st) => openPaymentModal(st || null, 'pagamento')}
+                    />
+                )}
 
+                {currentTab === 'students' && (
+                    <StudentList
+                        gymName={gymName}
+                        onOpenPayment={(st) => openPaymentModal(st, 'pagamento')}
+                    />
+                )}
 
-            {/* Sidebar */}
-            <aside className={`sidebar ${isMobileMenuOpen ? 'open' : ''}`}>
-                <div className="sidebar-header">
-                    <div className="logo-container">
-                        <span className="logo-icon">
-                            {gymLogo.startsWith('data:image') ? (
-                                <img src={gymLogo} className="logo-img" alt="Logo" />
-                            ) : (
-                                gymLogo
-                            )}
-                        </span>
-                        <h1 className="logo-text">{gymName}</h1>
-                    </div>
-                    <button
-                        className="md:hidden"
-                        onClick={() => setIsMobileMenuOpen(false)}
-                    >
-                        <X size={24} />
-                    </button>
-                </div>
+                {currentTab === 'finance' && (
+                    <FinancialHub
+                        gymName={gymName}
+                        onNewPayment={() => openPaymentModal(null, 'pagamento')}
+                        onEditPayment={(p) => openPaymentModal(null, 'pagamento', p)}
+                    />
+                )}
 
-                <nav className="sidebar-nav">
-                    <NavItem id="dashboard" icon={LayoutDashboard} label="Dashboard" />
-                    <NavItem id="students" icon={Users} label="Alunos" />
-                    <NavItem id="personal-dashboard" icon={Dumbbell} label="Controle Personal" />
-                    <NavItem id="attendance" icon={UserCheck} label="Presenças" />
-                    <NavItem id="payments" icon={DollarSign} label="Pagamentos" />
-                    <NavItem id="financial" icon={DollarSign} label="Despesas" />
-                    <NavItem id="settings" icon={Settings} label="Configurações" />
-                    <NavItem id="help" icon={HelpCircle} label="Ajuda" />
-                </nav>
+                {currentTab === 'attendance' && <AttendanceManager />}
 
-                <div className="sidebar-footer">
-                    <button onClick={toggleDarkMode} className="theme-toggle">
-                        {darkMode ? <Sun size={20} /> : <Moon size={20} />}
-                        <span>{darkMode ? 'Modo Claro' : 'Modo Escuro'}</span>
-                    </button>
-                    <div className="sidebar-credits">
-                        <div className="credits-version">v5 (IndexedDB)</div>
-                        <div className="credits-about">
-                            <span className="credits-made">Feito por <strong>MTZ</strong>, <strong>Antigravity</strong> e <strong>Cursor</strong></span>
-                            <span className="credits-quote">"De trabalhadores, para trabalhadores."</span>
-                        </div>
-                    </div>
-                </div>
-            </aside>
+                {currentTab === 'personal' && (
+                    <PersonalDashboard
+                        gymName={gymName}
+                        onSellPackage={(st) => openPaymentModal(st, 'personal')}
+                    />
+                )}
 
-            {/* Mobile Header */}
-            <header className="mobile-header md:hidden">
-                <button onClick={() => setIsMobileMenuOpen(true)}>
-                    <Menu size={24} />
-                </button>
-                <div className="flex items-center gap-2 max-w-[70%]">
-                    {gymLogo.startsWith('data:image') ? (
-                        <img src={gymLogo} className="logo-img w-8 h-8 object-contain rounded-md" alt="Logo" />
-                    ) : (
-                        <span className="text-xl">{gymLogo}</span>
-                    )}
-                    <h1 className="text-base font-bold truncate">{gymName}</h1>
-                </div>
-                <div className="w-6"></div> {/* Spacer */}
-            </header>
+                {currentTab === 'settings' && (
+                    <Settings
+                        darkMode={darkMode}
+                        onToggleDarkMode={handleToggleDarkMode}
+                    />
+                )}
 
-            {/* Main Content */}
-            <main className="main-content">
-                {renderContent()}
-            </main>
+                {currentTab === 'help' && <HelpPage />}
+            </AppShell>
 
-            {/* Overlay for mobile sidebar */}
-            {isMobileMenuOpen && (
-                <div
-                    className="fixed inset-0 bg-black/50 z-20 md:hidden"
-                    onClick={() => setIsMobileMenuOpen(false)}
-                />
-            )}
-        </div>
+            <StudentModal
+                isOpen={quickStudentModalOpen}
+                onClose={() => setQuickStudentModalOpen(false)}
+                studentToEdit={null}
+                plans={plans}
+                personalPlans={personalPlans}
+                existingStudents={students}
+            />
+
+            <PaymentModal
+                isOpen={paymentModalOpen}
+                onClose={() => {
+                    setPaymentModalOpen(false);
+                    setPaymentToEdit(null);
+                    setPaymentStudent(null);
+                }}
+                paymentToEdit={paymentToEdit}
+                preselectedStudent={paymentStudent}
+                initialType={paymentInitialType}
+                students={students}
+                payments={payments}
+                plans={plans}
+                personalPlans={personalPlans}
+                gymName={gymName}
+            />
+        </>
     );
 }
-
-export default App;

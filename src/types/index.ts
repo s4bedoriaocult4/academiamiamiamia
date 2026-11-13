@@ -1,6 +1,13 @@
 // Tipos principais do sistema
 
-export interface Student {
+export type PlanCategory = 'mensal' | 'trimestral' | 'semestral' | 'anual' | 'outro';
+
+export interface SyncMetadata {
+    updatedAt?: string;
+    deletedAt?: string | null;
+}
+
+export interface Student extends SyncMetadata {
     id: string;
     name: string;
     phone: string;
@@ -15,17 +22,19 @@ export interface Student {
     graduation: string;
     status: 'ativo' | 'inativo';
     birthDate?: string;
-    responsibleName?: string; // For minors
+    responsibleName?: string; // Para menores
     createdAt: string;
     notes?: string;
     // Campos para plano Personal (opcionais para compatibilidade)
-    planType?: 'normal' | 'personal' | 'both'; // Tipo de plano do aluno
-    personalPlanId?: string; // ID do plano personal (se tiver)
-    personalClassesRemaining?: number; // Aulas restantes do pacote personal
-    personalStartDate?: string; // Data de início do pacote personal
+    planType?: 'normal' | 'personal' | 'both';
+    personalPlanId?: string;
+    personalClassesRemaining?: number;
+    personalStartDate?: string;
+    // Fidelidade (ex: início do ciclo Trimestral/Semestral)
+    commitmentStartDate?: string;
 }
 
-export interface Payment {
+export interface Payment extends SyncMetadata {
     id: string;
     studentId?: string; // Opcional para entradas avulsas
     studentName?: string; // Opcional para entradas avulsas
@@ -34,21 +43,23 @@ export interface Payment {
     date: string;
     referenceMonth?: string; // Opcional para entradas
     type?: 'pagamento' | 'entrada' | 'personal' | 'item_vendido'; // 'entrada' = antigo 'item_vendido'
-    itemDescription?: string; // Para entradas (antigo item_vendido)
+    itemDescription?: string; // Para entradas
     lateFee?: number;
+    personalPlanId?: string; // ID do pacote personal vendido (para reconciliação segura)
+    classesAdded?: number; // Quantidade de aulas adicionadas neste pagamento
     createdAt: string;
 }
 
-export interface Attendance {
+export interface Attendance extends SyncMetadata {
     id: string;
     studentId: string;
     studentName: string;
     date: string;
     createdAt: string;
-    attendanceType?: 'normal' | 'personal'; // Tipo de presença (default: 'normal')
+    attendanceType?: 'normal' | 'personal';
 }
 
-export interface Expense {
+export interface Expense extends SyncMetadata {
     id: string;
     description: string;
     category: 'Aluguel' | 'Luz' | 'Água' | 'Equipamentos' | 'Marketing' | 'Manutenção' | 'Outros';
@@ -58,7 +69,7 @@ export interface Expense {
     createdAt: string;
 }
 
-export interface DailyNote {
+export interface DailyNote extends SyncMetadata {
     id: string;
     date: string;
     content: string;
@@ -66,35 +77,41 @@ export interface DailyNote {
     updatedAt: string;
 }
 
-export interface Plan {
+export interface Plan extends SyncMetadata {
     id: string;
     name: string;
+    category?: PlanCategory;
     price: number;
     frequency: number;
-    durationMonths?: number;
+    durationMonths?: number; // Ciclo de cobrança em meses (1 = mensalidade todo mês)
+    commitmentMonths?: number; // Fidelidade do contrato (1 = sem fidelidade, 3 = trimestral, 6 = semestral)
+    sortOrder?: number;
 }
 
-// Novo tipo para planos Personal
-export interface PersonalPlan {
+export interface PersonalPlan extends SyncMetadata {
     id: string;
     name: string;
     price: number;
-    totalClasses: number; // 4, 8, 12 ou 16 aulas
-    frequencyPerWeek: number; // 1, 2, 3 ou 99 (livre)
+    totalClasses: number;
+    frequencyPerWeek: number;
 }
 
-// Snapshot mensal - registro imutável de fechamento de mês
-export interface MonthlySnapshot {
-    id: string;              // Formato: "2026-01" (ano-mês)
+export interface MonthlySnapshot extends SyncMetadata {
+    id: string; // Formato: "2026-01"
     year: number;
-    month: number;           // 0-11 (janeiro = 0)
-    revenue: number;         // Total de receitas do mês
-    expenses: number;        // Total de despesas do mês
-    profit: number;          // Receita - Despesas
-    activeStudents: number;  // Alunos ativos no fechamento
-    overdueCount: number;    // Inadimplentes no fechamento
-    attendanceCount: number; // Total de presenças do mês
-    closedAt: string;        // Data/hora do fechamento automático
+    month: number; // 0-11
+    revenue: number;
+    expenses: number;
+    profit: number;
+    activeStudents: number;
+    overdueCount: number;
+    attendanceCount: number;
+    closedAt: string;
+}
+
+export interface SettingItem extends SyncMetadata {
+    key: string;
+    value: any;
 }
 
 export interface AppData {
@@ -103,10 +120,10 @@ export interface AppData {
     attendance: Attendance[];
     expenses: Expense[];
     dailyNotes: DailyNote[];
-    plans?: Plan[]; // Added for backup
-    personalPlans?: PersonalPlan[]; // Added for backup
-    monthlySnapshots?: MonthlySnapshot[]; // Histórico mensal imutável
-    settings?: { key: string; value: any }[]; // Configurações completas
+    plans?: Plan[];
+    personalPlans?: PersonalPlan[];
+    monthlySnapshots?: MonthlySnapshot[];
+    settings?: SettingItem[];
     gymName?: string;
     gymLogo?: string;
     darkMode: boolean;
@@ -115,7 +132,14 @@ export interface AppData {
     lastBackup?: string;
 }
 
-// Graduações do Muay Thai
+export type CloudSyncState =
+    | 'local-only'
+    | 'unauthenticated'
+    | 'syncing'
+    | 'synced'
+    | 'offline'
+    | 'error';
+
 export const GRADUATIONS = [
     'Sem graduação',
     'Branco',
@@ -130,14 +154,19 @@ export const GRADUATIONS = [
     'Vermelho',
     'Vermelho-branco',
     'Preto',
-    'Preto-branco'
+    'Preto-branco',
 ];
 
-// Dias de vencimento disponíveis
 export const DUE_OPTIONS = [5, 10, 15, 20];
 
-// Métodos de pagamento
 export const PAYMENT_METHODS = ['PIX', 'Dinheiro', 'Cartão Crédito', 'Link Pagamento'] as const;
 
-// Categorias de despesas
-export const EXPENSE_CATEGORIES = ['Aluguel', 'Luz', 'Água', 'Equipamentos', 'Marketing', 'Manutenção', 'Outros'] as const;
+export const EXPENSE_CATEGORIES = [
+    'Aluguel',
+    'Luz',
+    'Água',
+    'Equipamentos',
+    'Marketing',
+    'Manutenção',
+    'Outros',
+] as const;

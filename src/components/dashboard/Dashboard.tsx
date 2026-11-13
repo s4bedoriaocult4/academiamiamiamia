@@ -1,550 +1,829 @@
-import { useState, useEffect } from 'react';
+import { useMemo, useState } from 'react';
 import {
-    Users, DollarSign, Clock, AlertCircle, Printer, Cake, ChevronDown, ChevronUp, History, Calendar
+    Users,
+    TrendingUp,
+    Wallet,
+    CalendarCheck,
+    AlertTriangle,
+    Clock,
+    Cake,
+    UserPlus,
+    DollarSign,
+    RefreshCw,
+    History,
+    CheckCircle2,
 } from 'lucide-react';
 import {
-    BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-    PieChart, Pie, Cell, Legend
+    ResponsiveContainer,
+    BarChart,
+    Bar,
+    XAxis,
+    YAxis,
+    CartesianGrid,
+    Tooltip,
+    Legend,
 } from 'recharts';
-import { useStudents, usePayments, useExpenses, useAttendance } from '../../hooks/useGymStore';
-import { useLiveQuery } from 'dexie-react-hooks';
+import {
+    useAttendance,
+    useExpenses,
+    useMonthlySnapshots,
+    usePayments,
+    usePlans,
+    useStudents,
+} from '../../hooks/useGymStore';
+import { Student } from '../../types';
+import {
+    formatCurrencyBRL,
+    formatDateBR,
+    getCurrentMonthString,
+    getDaysUntilDue,
+    getStudentPaymentStatus,
+    getYearMonth,
+} from '../../utils/dateUtils';
+import { getCategoryShortLabel, inferPlanCategory } from '../../utils/planUtils';
+import { getMonthName, syncAndRepairMonthlySnapshots } from '../../services/MonthlyHistoryService';
+import { pushBatchRecords } from '../../services/syncService';
 import { db } from '../../services/db';
-import { checkAndCloseMonth, getMonthHistory, getMonthName, generateMissingSnapshots } from '../../services/MonthlyHistoryService';
-import { MonthlySnapshot } from '../../types';
-import { isOverdue, getDaysUntilDue, getTodayDateString, getCurrentMonthString, getYearMonth } from '../../utils/dateUtils';
+import {
+    buildBirthdayMessage,
+    buildOverdueMessage,
+    buildReminderMessage,
+} from '../../utils/whatsapp';
+import { WhatsAppButton } from '../common/WhatsAppButton';
+import { PlanBadge } from '../common/PlanBadge';
+import { NavTab } from '../layout/AppShell';
+import { useToast } from '../../contexts/ToastContext';
 
-const CHART_COLORS = ['#1e40af', '#3b82f6', '#60a5fa', '#93c5fd', '#bfdbfe'];
+interface DashboardProps {
+    gymName: string;
+    onNavigate: (tab: NavTab) => void;
+    onQuickNewStudent: () => void;
+    onQuickPayment: (student?: Student) => void;
+}
 
-export function Dashboard() {
+type AlertTab = 'overdue' | 'dueSoon' | 'birthdays';
+type PlanChartMode = 'plan' | 'category';
+
+export function Dashboard({
+    gymName,
+    onNavigate,
+    onQuickNewStudent,
+    onQuickPayment,
+}: DashboardProps) {
     const students = useStudents();
     const payments = usePayments();
     const expenses = useExpenses();
     const attendance = useAttendance();
-    const plans = useLiveQuery(() => db.plans.toArray()) || [];
+    const plans = usePlans();
+    const snapshots = useMonthlySnapshots();
+    const { showToast } = useToast();
 
-    // Estado para minimizar aniversariantes
-    const [birthdaysCollapsed, setBirthdaysCollapsed] = useState(() => {
-        // Carregar preferência do localStorage
-        const saved = localStorage.getItem('birthdaysCollapsed');
-        return saved === 'true';
-    });
+    const currentMonthId = getCurrentMonthString();
+    const [selectedMonthId, setSelectedMonthId] = useState<string>(currentMonthId);
+    const [alertTab, setAlertTab] = useState<AlertTab>('overdue');
+    const [planChartMode, setPlanChartMode] = useState<PlanChartMode>('plan');
+    const [isRepairing, setIsRepairing] = useState(false);
 
-    // Salvar preferência quando mudar
-    useEffect(() => {
-        localStorage.setItem('birthdaysCollapsed', String(birthdaysCollapsed));
-    }, [birthdaysCollapsed]);
+    const planMap = useMemo(() => new Map(plans.map((p) => [p.id, p])), [plans]);
 
-    // Estado para histórico mensal
-    const [monthlyHistory, setMonthlyHistory] = useState<MonthlySnapshot[]>([]);
-    const [historyCollapsed, setHistoryCollapsed] = useState(true);
-    const [monthClosed, setMonthClosed] = useState(false);
+    const pastSnapshots = useMemo(
+        () =>
+            [...snapshots]
+                .filter((s) => s.id < currentMonthId)
+                .sort((a, b) => b.id.localeCompare(a.id)),
+        [snapshots, currentMonthId]
+    );
 
-    // Estado para seleção de mês (dropdown)
-    // 'current' = mês atual (dados dinâmicos), ou ID do snapshot (ex: '2026-01')
-    const [selectedMonth, setSelectedMonth] = useState<string>('current');
-    const [selectedSnapshot, setSelectedSnapshot] = useState<MonthlySnapshot | null>(null);
+    const isCurrentMonth = selectedMonthId === currentMonthId;
+    const activeSnapshot = useMemo(
+        () => pastSnapshots.find((s) => s.id === selectedMonthId) || null,
+        [pastSnapshots, selectedMonthId]
+    );
 
-    // Verificar virada de mês ao carregar o Dashboard
-    useEffect(() => {
-        const initMonthlyCheck = async () => {
-            try {
-                // 1. Tentar fechar mês anterior automaticamente
-                const wasClosed = await checkAndCloseMonth();
+    // Métricas atuais e do mês selecionado
+    const metrics = useMemo(() => {
+        const activeStudents = students.filter((s) => s.status === 'ativo');
+        const overdueList = activeStudents
+            .filter((s) => getStudentPaymentStatus(s).status === 'overdue')
+            .sort((a, b) => getDaysUntilDue(a.nextDue) - getDaysUntilDue(b.nextDue));
 
-                // 2. Gerar snapshots retroativos se faltarem (ex: implementação nova em fevereiro gera janeiro)
-                const generatedRetroactive = await generateMissingSnapshots();
+        const dueSoonList = activeStudents
+            .filter((s) => {
+                const days = getDaysUntilDue(s.nextDue);
+                return days >= 0 && days <= 5;
+            })
+            .sort((a, b) => getDaysUntilDue(a.nextDue) - getDaysUntilDue(b.nextDue));
 
-                if (wasClosed || generatedRetroactive > 0) {
-                    setMonthClosed(true);
-                    // Esconder mensagem após 5 segundos
-                    setTimeout(() => setMonthClosed(false), 5000);
-                }
+        const currentMonthNum = new Date().getMonth() + 1;
+        const birthdaysList = activeStudents
+            .filter((s) => {
+                if (!s.birthDate) return false;
+                const parts = s.birthDate.split('T')[0].split('-');
+                return parts.length === 3 && parseInt(parts[1], 10) === currentMonthNum;
+            })
+            .sort((a, b) => {
+                const dayA = parseInt((a.birthDate || '').split('-')[2] || '0', 10);
+                const dayB = parseInt((b.birthDate || '').split('-')[2] || '0', 10);
+                return dayA - dayB;
+            });
 
-                // 3. Carregar histórico atualizado
-                const history = await getMonthHistory();
-                setMonthlyHistory(history);
-            } catch (error) {
-                console.error('Erro ao verificar histórico mensal:', error);
-            }
+        const monthPayments = payments.filter((p) => getYearMonth(p.date) === selectedMonthId);
+        const liveRevenue = monthPayments.reduce(
+            (sum, p) => sum + (p.amount || 0) + (p.lateFee || 0),
+            0
+        );
+
+        const monthExpenses = expenses.filter((e) => getYearMonth(e.date) === selectedMonthId);
+        const liveExpenses = monthExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
+
+        const liveAttendanceCount = attendance.filter(
+            (a) => getYearMonth(a.date) === selectedMonthId
+        ).length;
+
+        const expectedRevenue = activeStudents.reduce((sum, s) => {
+            if (s.planType === 'personal') return sum;
+            const plan = planMap.get(s.plan);
+            return sum + (plan?.price || 0);
+        }, 0);
+
+        const personalCreditsActive = activeStudents.filter(
+            (s) => (s.personalClassesRemaining || 0) > 0
+        ).length;
+
+        const revenue = isCurrentMonth
+            ? liveRevenue
+            : activeSnapshot?.revenue ?? liveRevenue;
+        const expenseTotal = isCurrentMonth
+            ? liveExpenses
+            : activeSnapshot?.expenses ?? liveExpenses;
+
+        return {
+            activeCount: isCurrentMonth
+                ? activeStudents.length
+                : activeSnapshot?.activeStudents ?? activeStudents.length,
+            overdueCount: isCurrentMonth
+                ? overdueList.length
+                : activeSnapshot?.overdueCount ?? overdueList.length,
+            overdueList,
+            dueSoonList,
+            birthdaysList,
+            revenue,
+            expenseTotal,
+            profit: revenue - expenseTotal,
+            expectedRevenue,
+            paymentCount: monthPayments.length,
+            attendanceCount: isCurrentMonth
+                ? liveAttendanceCount
+                : activeSnapshot?.attendanceCount ?? liveAttendanceCount,
+            personalCreditsActive,
         };
-        initMonthlyCheck();
-    }, []);
+    }, [
+        students,
+        payments,
+        expenses,
+        attendance,
+        planMap,
+        selectedMonthId,
+        isCurrentMonth,
+        activeSnapshot,
+    ]);
 
-    // Sincronizar snapshot selecionado quando muda o mês
-    useEffect(() => {
-        if (selectedMonth === 'current') {
-            setSelectedSnapshot(null);
-        } else {
-            const snapshot = monthlyHistory.find(s => s.id === selectedMonth);
-            setSelectedSnapshot(snapshot || null);
-        }
-    }, [selectedMonth, monthlyHistory]);
+    // Fluxo dos últimos 6 meses (sem bug de UTC e incluindo multas)
+    const cashflowData = useMemo(() => {
+        const result: { name: string; Receita: number; Despesas: number }[] = [];
+        const now = new Date();
 
-    // Dados do mês visualizado (snapshot ou dados dinâmicos)
-    const viewingHistoricalMonth = selectedSnapshot !== null;
-
-    // Computed Values
-    const activeStudents = students.filter(s => s.status === 'ativo');
-
-    const overdueStudents = activeStudents.filter(s => isOverdue(s.nextDue));
-
-    const today = new Date();
-    const currentMonth = today.getMonth();
-    const currentYear = today.getFullYear();
-    const todayStr = getTodayDateString();
-
-    const currentYearMonth = getCurrentMonthString();
-
-    const thisMonthPayments = payments.filter(p => {
-        return p.date && getYearMonth(p.date) === currentYearMonth;
-    });
-    const thisMonthRevenue = thisMonthPayments.reduce((sum, p) => sum + p.amount, 0);
-
-    const thisMonthExpenses = expenses.filter(e => {
-        return e.date && getYearMonth(e.date) === currentYearMonth;
-    });
-    const thisMonthExpenseTotal = thisMonthExpenses.reduce((sum, e) => sum + e.amount, 0);
-
-    const expectedRevenue = activeStudents.reduce((sum, s) => {
-        const plan = plans.find(p => p.id === s.plan);
-        return sum + (plan?.price || 0);
-    }, 0);
-
-    const todayAttendance = attendance.filter(a => a.date === todayStr);
-
-    const dueThisWeek = activeStudents.filter(s => {
-        const days = getDaysUntilDue(s.nextDue);
-        return days >= 0 && days <= 7;
-    });
-
-    // Aniversariantes do mês
-    const getBirthdayStudents = () => {
-        return activeStudents.filter(s => {
-            if (!s.birthDate) return false;
-            const birth = new Date(s.birthDate + 'T12:00:00');
-            const birthMonth = birth.getMonth();
-            return birthMonth === currentMonth;
-        }).sort((a, b) => {
-            if (!a.birthDate || !b.birthDate) return 0;
-            const aDay = new Date(a.birthDate + 'T12:00:00').getDate();
-            const bDay = new Date(b.birthDate + 'T12:00:00').getDate();
-            return aDay - bDay;
-        });
-    };
-
-    const birthdayStudents = getBirthdayStudents();
-    const todayBirthdays = birthdayStudents.filter(s => {
-        if (!s.birthDate) return false;
-        const birth = new Date(s.birthDate + 'T12:00:00');
-        return birth.getMonth() === currentMonth && birth.getDate() === today.getDate();
-    });
-
-    // Chart Data
-    const getRevenueChartData = () => {
-        const months = [];
         for (let i = 5; i >= 0; i--) {
-            let targetYear = currentYear;
-            let targetMonth = currentMonth - i;
-            while (targetMonth < 0) {
-                targetMonth += 12;
-                targetYear -= 1;
-            }
-            const targetMonthStr = `${targetYear}-${String(targetMonth + 1).padStart(2, '0')}`;
-            const d = new Date(targetYear, targetMonth, 1, 12, 0, 0);
-            const monthName = d.toLocaleDateString('pt-BR', { month: 'short' });
+            const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+            const ym = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+            const label = `${getMonthName(d.getMonth()).slice(0, 3)}/${String(d.getFullYear()).slice(2)}`;
 
-            const mPayments = payments.filter(p => p.date && getYearMonth(p.date) === targetMonthStr);
-            const mExpenses = expenses.filter(e => e.date && getYearMonth(e.date) === targetMonthStr);
+            const rev = payments
+                .filter((p) => getYearMonth(p.date) === ym)
+                .reduce((sum, p) => sum + (p.amount || 0) + (p.lateFee || 0), 0);
 
-            months.push({
-                month: monthName,
-                receita: mPayments.reduce((s, p) => s + p.amount, 0),
-                despesa: mExpenses.reduce((s, e) => s + e.amount, 0)
+            const exp = expenses
+                .filter((e) => getYearMonth(e.date) === ym)
+                .reduce((sum, e) => sum + (e.amount || 0), 0);
+
+            result.push({
+                name: label,
+                Receita: Number(rev.toFixed(2)),
+                Despesas: Number(exp.toFixed(2)),
             });
         }
-        return months;
+
+        return result;
+    }, [payments, expenses]);
+
+    // Distribuição por Plano ou Categoria (corrigindo o antigo bug do split(' ')[0])
+    const planDistribution = useMemo(() => {
+        const activeStudents = students.filter((s) => s.status === 'ativo');
+        const counts = new Map<string, number>();
+
+        for (const s of activeStudents) {
+            if (s.planType === 'personal') {
+                const key = 'Somente Personal';
+                counts.set(key, (counts.get(key) || 0) + 1);
+                continue;
+            }
+            const plan = planMap.get(s.plan);
+            const key =
+                planChartMode === 'category'
+                    ? getCategoryShortLabel(inferPlanCategory(plan || { name: s.plan }))
+                    : plan?.name || s.plan || 'Sem plano';
+            counts.set(key, (counts.get(key) || 0) + 1);
+        }
+
+        const total = activeStudents.length || 1;
+        return Array.from(counts.entries())
+            .map(([label, count]) => ({
+                label,
+                count,
+                percent: Math.round((count / total) * 100),
+            }))
+            .sort((a, b) => b.count - a.count);
+    }, [students, planMap, planChartMode]);
+
+    const handleRepairSnapshots = async () => {
+        setIsRepairing(true);
+        try {
+            const { updated, removedFuture } = await syncAndRepairMonthlySnapshots();
+            const allSnaps = await db.monthlySnapshots.toArray();
+            await pushBatchRecords('monthlySnapshots', allSnaps).catch(() => {});
+            showToast(
+                'success',
+                `Histórico recalculado! ${updated} mês(es) atualizado(s), ${removedFuture} registro(s) futuro(s) removido(s).`
+            );
+        } catch {
+            showToast('error', 'Não foi possível recalcular o histórico.');
+        } finally {
+            setIsRepairing(false);
+        }
     };
 
-    const getPlanDistribution = () => {
-        return plans.map(plan => ({
-            name: plan.name.split(' ')[0],
-            value: activeStudents.filter(s => s.plan === plan.id).length
-        })).filter(p => p.value > 0);
-    };
+    const collectionProgress =
+        metrics.expectedRevenue > 0
+            ? Math.min(100, Math.round((metrics.revenue / metrics.expectedRevenue) * 100))
+            : 0;
 
     return (
-        <div className="space-y-6 animate-fade-in">
-            <div className="flex justify-between items-center mb-4 no-print" style={{ marginBottom: '1rem' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                    <h2 style={{ fontSize: '1.25rem', fontWeight: 600 }}>Visão Geral</h2>
-                    {/* Dropdown de seleção de mês */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <Calendar size={18} style={{ color: '#6b7280' }} />
-                        <select
-                            value={selectedMonth}
-                            onChange={(e) => setSelectedMonth(e.target.value)}
-                            className="input"
-                            style={{
-                                padding: '0.5rem 1rem',
-                                borderRadius: '6px',
-                                border: '1px solid #d1d5db',
-                                minWidth: '180px',
-                                fontSize: '0.875rem',
-                                backgroundColor: viewingHistoricalMonth ? '#fef3c7' : 'white'
-                            }}
-                        >
-                            <option value="current">
-                                {getMonthName(currentMonth)} {currentYear} (Atual)
-                            </option>
-                            {monthlyHistory.map(snapshot => (
-                                <option key={snapshot.id} value={snapshot.id}>
-                                    {getMonthName(snapshot.month)} {snapshot.year} (Fechado)
-                                </option>
-                            ))}
-                        </select>
-                    </div>
+        <div className="space-y-6">
+            {/* Cabeçalho com ações rápidas */}
+            <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+                <div>
+                    <h1 className="font-display text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white tracking-tight">
+                        Painel Geral
+                    </h1>
+                    <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
+                        Acompanhe vencimentos, cobranças e resultados de {gymName}
+                    </p>
                 </div>
-                <button onClick={() => window.print()} className="btn btn-outline" title="Imprimir Relatório">
-                    <Printer size={18} /> Imprimir Relatório
-                </button>
+
+                <div className="flex flex-wrap items-center gap-2">
+                    <select
+                        value={selectedMonthId}
+                        onChange={(e) => setSelectedMonthId(e.target.value)}
+                        className="input w-auto py-2 pr-8 text-sm font-semibold"
+                        aria-label="Selecionar mês de referência"
+                    >
+                        <option value={currentMonthId}>Mês Atual ({currentMonthId})</option>
+                        {pastSnapshots.map((s) => (
+                            <option key={s.id} value={s.id}>
+                                {getMonthName(s.month)}/{s.year}
+                            </option>
+                        ))}
+                    </select>
+
+                    <button
+                        type="button"
+                        onClick={() => onQuickPayment()}
+                        className="btn btn-success"
+                    >
+                        <DollarSign className="w-4 h-4" />
+                        Receber R$
+                    </button>
+
+                    <button
+                        type="button"
+                        onClick={onQuickNewStudent}
+                        className="btn btn-primary"
+                    >
+                        <UserPlus className="w-4 h-4" />
+                        Novo Aluno
+                    </button>
+                </div>
             </div>
 
-            {/* Aviso de visualização histórica */}
-            {viewingHistoricalMonth && (
-                <div className="alert alert-info" style={{ background: '#fef3c7', border: '1px solid #f59e0b' }}>
-                    <History size={20} />
-                    <div className="alert-content">
-                        <p className="alert-title" style={{ color: '#92400e' }}>
-                            📅 Visualizando mês fechado: {getMonthName(selectedSnapshot!.month)} {selectedSnapshot!.year}
-                        </p>
-                        <p style={{ color: '#92400e', fontSize: '0.875rem' }}>
-                            Estes são dados consolidados do fechamento. Os cards abaixo mostram os totais salvos.
-                        </p>
+            {!isCurrentMonth && (
+                <div className="card p-4 bg-sky-50/70 dark:bg-sky-950/30 border-sky-200 dark:border-sky-800/60 flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex items-center gap-2.5 text-sm font-semibold text-sky-900 dark:text-sky-200">
+                        <History className="w-4 h-4 text-sky-600" />
+                        Visualizando histórico consolidado de{' '}
+                        <span className="underline">{selectedMonthId}</span>
                     </div>
+                    <button
+                        type="button"
+                        onClick={() => setSelectedMonthId(currentMonthId)}
+                        className="btn btn-secondary btn-sm"
+                    >
+                        Voltar para o Mês Atual
+                    </button>
                 </div>
             )}
 
-            {/* Aniversariantes do Mês - Com opção de minimizar */}
-            {birthdayStudents.length > 0 && (
-                <div className={`alert ${todayBirthdays.length > 0 ? 'alert-warning' : 'alert-info'} mb-6`}>
-                    <Cake size={20} />
-                    <div className="alert-content" style={{ flex: 1 }}>
-                        <div
-                            className="alert-title flex justify-between items-center cursor-pointer"
-                            onClick={() => setBirthdaysCollapsed(!birthdaysCollapsed)}
-                            style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }}
-                        >
-                            <span>
-                                🎂 Aniversariantes do Mês ({birthdayStudents.length})
-                                {todayBirthdays.length > 0 && ' - Hoje é aniversário!'}
-                            </span>
+            {/* Cards KPI */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+                <button
+                    type="button"
+                    onClick={() => onNavigate('students')}
+                    className="card-interactive p-5 text-left"
+                >
+                    <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                            Alunos Ativos
+                        </span>
+                        <div className="w-9 h-9 rounded-xl bg-rose-50 dark:bg-rose-950/50 text-rose-600 dark:text-rose-400 flex items-center justify-center">
+                            <Users className="w-5 h-5" />
+                        </div>
+                    </div>
+                    <div className="mt-3 font-display text-3xl font-bold text-slate-900 dark:text-white">
+                        {metrics.activeCount}
+                    </div>
+                    <div className="mt-2 flex items-center gap-2 text-xs">
+                        {metrics.overdueCount > 0 ? (
+                            <span className="badge badge-danger">{metrics.overdueCount} atrasado(s)</span>
+                        ) : (
+                            <span className="badge badge-success">Todos em dia</span>
+                        )}
+                        <span className="text-slate-500 dark:text-slate-400">
+                            {metrics.dueSoonList.length} vencendo
+                        </span>
+                    </div>
+                </button>
+
+                <button
+                    type="button"
+                    onClick={() => onNavigate('finance')}
+                    className="card-interactive p-5 text-left"
+                >
+                    <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                            Receita no Mês
+                        </span>
+                        <div className="w-9 h-9 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 text-emerald-600 dark:text-emerald-400 flex items-center justify-center">
+                            <TrendingUp className="w-5 h-5" />
+                        </div>
+                    </div>
+                    <div className="mt-3 font-display text-3xl font-bold text-emerald-600 dark:text-emerald-400">
+                        {formatCurrencyBRL(metrics.revenue)}
+                    </div>
+                    {isCurrentMonth && metrics.expectedRevenue > 0 ? (
+                        <div className="mt-2.5 space-y-1">
+                            <div className="flex justify-between text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                                <span>Previsto: {formatCurrencyBRL(metrics.expectedRevenue)}</span>
+                                <span>{collectionProgress}%</span>
+                            </div>
+                            <div className="w-full h-1.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                                <div
+                                    className="h-full bg-emerald-500 rounded-full transition-all duration-300"
+                                    style={{ width: `${collectionProgress}%` }}
+                                />
+                            </div>
+                        </div>
+                    ) : (
+                        <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                            {metrics.paymentCount} lançamento(s)
+                        </p>
+                    )}
+                </button>
+
+                <button
+                    type="button"
+                    onClick={() => onNavigate('finance')}
+                    className="card-interactive p-5 text-left"
+                >
+                    <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                            Saldo / Lucro Líquido
+                        </span>
+                        <div className="w-9 h-9 rounded-xl bg-sky-50 dark:bg-sky-950/50 text-sky-600 dark:text-sky-400 flex items-center justify-center">
+                            <Wallet className="w-5 h-5" />
+                        </div>
+                    </div>
+                    <div
+                        className={`mt-3 font-display text-3xl font-bold ${
+                            metrics.profit >= 0
+                                ? 'text-slate-900 dark:text-white'
+                                : 'text-red-600 dark:text-red-400'
+                        }`}
+                    >
+                        {formatCurrencyBRL(metrics.profit)}
+                    </div>
+                    <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                        Despesas: <strong className="text-slate-700 dark:text-slate-200">{formatCurrencyBRL(metrics.expenseTotal)}</strong>
+                    </p>
+                </button>
+
+                <button
+                    type="button"
+                    onClick={() => onNavigate('attendance')}
+                    className="card-interactive p-5 text-left"
+                >
+                    <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                            Presenças no Mês
+                        </span>
+                        <div className="w-9 h-9 rounded-xl bg-violet-50 dark:bg-violet-950/50 text-violet-600 dark:text-violet-400 flex items-center justify-center">
+                            <CalendarCheck className="w-5 h-5" />
+                        </div>
+                    </div>
+                    <div className="mt-3 font-display text-3xl font-bold text-slate-900 dark:text-white">
+                        {metrics.attendanceCount}
+                    </div>
+                    <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                        {metrics.personalCreditsActive} aluno(s) com saldo Personal
+                    </p>
+                </button>
+            </div>
+
+            {/* Central de Cobrança e Avisos Rápidos (1-clique) */}
+            {isCurrentMonth && (
+                <div className="card overflow-hidden">
+                    <div className="px-5 pt-4 pb-3 border-b border-slate-100 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3">
+                        <div className="flex flex-wrap items-center gap-2">
                             <button
-                                className="btn btn-sm"
-                                style={{ padding: '0.25rem', background: 'transparent', border: 'none' }}
-                                title={birthdaysCollapsed ? 'Expandir' : 'Minimizar'}
+                                type="button"
+                                onClick={() => setAlertTab('overdue')}
+                                className={`btn btn-sm ${
+                                    alertTab === 'overdue' ? 'btn-danger' : 'btn-secondary'
+                                }`}
                             >
-                                {birthdaysCollapsed ? <ChevronDown size={18} /> : <ChevronUp size={18} />}
+                                <AlertTriangle className="w-3.5 h-3.5" />
+                                Atrasados ({metrics.overdueList.length})
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setAlertTab('dueSoon')}
+                                className={`btn btn-sm ${
+                                    alertTab === 'dueSoon'
+                                        ? 'bg-amber-500 text-white hover:bg-amber-600'
+                                        : 'btn-secondary'
+                                }`}
+                            >
+                                <Clock className="w-3.5 h-3.5" />
+                                Vencem em 5 dias ({metrics.dueSoonList.length})
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setAlertTab('birthdays')}
+                                className={`btn btn-sm ${
+                                    alertTab === 'birthdays' ? 'btn-primary' : 'btn-secondary'
+                                }`}
+                            >
+                                <Cake className="w-3.5 h-3.5" />
+                                Aniversariantes ({metrics.birthdaysList.length})
                             </button>
                         </div>
-                        {!birthdaysCollapsed && (
-                            <div className="mt-2 space-y-2">
-                                {birthdayStudents.map(s => {
-                                    if (!s.birthDate) return null;
-                                    const birth = new Date(s.birthDate + 'T12:00:00');
-                                    const isToday = birth.getMonth() === currentMonth && birth.getDate() === today.getDate();
-                                    const day = birth.getDate();
-                                    return (
-                                        <div
-                                            key={s.id}
-                                            className={`flex justify-between text-sm py-1 border-b ${isToday ? 'border-yellow-300 font-bold text-yellow-800' : 'border-blue-200'} last:border-0`}
-                                            style={{
-                                                display: 'flex',
-                                                justifyContent: 'space-between',
-                                                padding: '0.5rem 0',
-                                                fontWeight: isToday ? 'bold' : 'normal'
-                                            }}
-                                        >
-                                            <span>{s.name} {isToday && '🎉'}</span>
-                                            <span className="font-bold">
-                                                Dia {day}
-                                            </span>
-                                        </div>
-                                    );
-                                })}
-                            </div>
+
+                        <button
+                            type="button"
+                            onClick={() => onNavigate('students')}
+                            className="text-xs font-semibold text-rose-600 hover:text-rose-700 dark:text-rose-400"
+                        >
+                            Ver todos os alunos →
+                        </button>
+                    </div>
+
+                    <div className="p-4 sm:p-5">
+                        {alertTab === 'overdue' && (
+                            metrics.overdueList.length === 0 ? (
+                                <div className="py-6 text-center text-sm text-slate-500 flex flex-col items-center gap-2">
+                                    <CheckCircle2 className="w-8 h-8 text-emerald-500" />
+                                    <span>Excelente! Nenhum aluno ativo está em atraso hoje.</span>
+                                </div>
+                            ) : (
+                                <div className="divide-y divide-slate-100 dark:divide-slate-800 max-h-80 overflow-y-auto pr-1">
+                                    {metrics.overdueList.map((student) => {
+                                        const daysLate = Math.abs(getDaysUntilDue(student.nextDue));
+                                        const plan = planMap.get(student.plan);
+                                        return (
+                                            <div
+                                                key={student.id}
+                                                className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                                            >
+                                                <div className="min-w-0 space-y-1">
+                                                    <div className="flex items-center gap-2 flex-wrap">
+                                                        <span className="font-bold text-slate-900 dark:text-white text-sm truncate">
+                                                            {student.name}
+                                                        </span>
+                                                        <span className="badge badge-danger">
+                                                            {daysLate} dia(s) em atraso
+                                                        </span>
+                                                    </div>
+                                                    <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                                                        <PlanBadge plan={plan} fallbackName={student.plan} compact />
+                                                        <span>•</span>
+                                                        <span>Venceu em {formatDateBR(student.nextDue)}</span>
+                                                    </div>
+                                                </div>
+
+                                                <div className="flex items-center gap-2 shrink-0">
+                                                    <WhatsAppButton
+                                                        phone={student.phone}
+                                                        label="Cobrar"
+                                                        message={buildOverdueMessage(
+                                                            student.name,
+                                                            daysLate,
+                                                            student.nextDue,
+                                                            plan?.price,
+                                                            gymName
+                                                        )}
+                                                    />
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => onQuickPayment(student)}
+                                                        className="btn btn-success btn-sm"
+                                                    >
+                                                        <DollarSign className="w-3.5 h-3.5" />
+                                                        Receber
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )
+                        )}
+
+                        {alertTab === 'dueSoon' && (
+                            metrics.dueSoonList.length === 0 ? (
+                                <p className="py-6 text-center text-sm text-slate-500">
+                                    Nenhuma mensalidade vencendo nos próximos 5 dias.
+                                </p>
+                            ) : (
+                                <div className="divide-y divide-slate-100 dark:divide-slate-800 max-h-80 overflow-y-auto pr-1">
+                                    {metrics.dueSoonList.map((student) => {
+                                        const daysLeft = getDaysUntilDue(student.nextDue);
+                                        const plan = planMap.get(student.plan);
+                                        return (
+                                            <div
+                                                key={student.id}
+                                                className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                                            >
+                                                <div className="min-w-0 space-y-1">
+                                                    <div className="flex items-center gap-2 flex-wrap">
+                                                        <span className="font-bold text-slate-900 dark:text-white text-sm">
+                                                            {student.name}
+                                                        </span>
+                                                        <span className="badge badge-warning">
+                                                            {daysLeft === 0
+                                                                ? 'Vence hoje'
+                                                                : daysLeft === 1
+                                                                    ? 'Vence amanhã'
+                                                                    : `Em ${daysLeft} dias`}
+                                                        </span>
+                                                    </div>
+                                                    <div className="text-xs text-slate-500 dark:text-slate-400">
+                                                        {plan?.name || student.plan} • {formatDateBR(student.nextDue)}
+                                                    </div>
+                                                </div>
+
+                                                <div className="flex items-center gap-2 shrink-0">
+                                                    <WhatsAppButton
+                                                        phone={student.phone}
+                                                        label="Lembrar"
+                                                        message={buildReminderMessage(
+                                                            student.name,
+                                                            daysLeft,
+                                                            student.nextDue,
+                                                            plan?.price,
+                                                            gymName
+                                                        )}
+                                                    />
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => onQuickPayment(student)}
+                                                        className="btn btn-success btn-sm"
+                                                    >
+                                                        <DollarSign className="w-3.5 h-3.5" />
+                                                        Receber
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )
+                        )}
+
+                        {alertTab === 'birthdays' && (
+                            metrics.birthdaysList.length === 0 ? (
+                                <p className="py-6 text-center text-sm text-slate-500">
+                                    Nenhum aniversariante cadastrado neste mês.
+                                </p>
+                            ) : (
+                                <div className="divide-y divide-slate-100 dark:divide-slate-800 max-h-80 overflow-y-auto pr-1">
+                                    {metrics.birthdaysList.map((student) => {
+                                        const parts = (student.birthDate || '').split('-');
+                                        const dayMonth = parts.length === 3 ? `${parts[2]}/${parts[1]}` : '';
+                                        return (
+                                            <div
+                                                key={student.id}
+                                                className="py-3 flex items-center justify-between gap-3"
+                                            >
+                                                <div className="flex items-center gap-3 min-w-0">
+                                                    <span className="w-10 h-10 rounded-xl bg-rose-50 dark:bg-rose-950/50 text-rose-600 dark:text-rose-400 font-bold text-xs flex items-center justify-center shrink-0">
+                                                        {dayMonth}
+                                                    </span>
+                                                    <span className="font-semibold text-sm text-slate-900 dark:text-white truncate">
+                                                        {student.name}
+                                                    </span>
+                                                </div>
+
+                                                <WhatsAppButton
+                                                    phone={student.phone}
+                                                    label="Parabenizar"
+                                                    message={buildBirthdayMessage(student.name, gymName)}
+                                                />
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )
                         )}
                     </div>
                 </div>
             )}
 
-            {/* Stats Grid */}
-            <div className="stats-grid">
-                <div className="stat-card">
-                    <div className="stat-card-content">
+            {/* Gráficos */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+                <div className="card p-5 lg:col-span-2 space-y-4">
+                    <div className="flex items-center justify-between">
                         <div>
-                            <p className="stat-label">
-                                {viewingHistoricalMonth ? 'Alunos (Fechamento)' : 'Alunos Ativos'}
-                            </p>
-                            <p className="stat-value">
-                                {viewingHistoricalMonth ? selectedSnapshot!.activeStudents : activeStudents.length}
+                            <h3 className="font-display font-bold text-slate-900 dark:text-white text-base">
+                                Receita vs Despesas (Últimos 6 meses)
+                            </h3>
+                            <p className="text-xs text-slate-500 dark:text-slate-400">
+                                Valores reais por data de pagamento (incluindo multas e juros)
                             </p>
                         </div>
-                        <div className="stat-icon primary">
-                            <Users size={24} />
-                        </div>
+                    </div>
+
+                    <div className="h-64 w-full">
+                        <ResponsiveContainer width="100%" height="100%">
+                            <BarChart data={cashflowData}>
+                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                                <XAxis dataKey="name" tick={{ fontSize: 12 }} />
+                                <YAxis tick={{ fontSize: 12 }} />
+                                <Tooltip
+                                    formatter={(val: number) => formatCurrencyBRL(val)}
+                                    contentStyle={{
+                                        borderRadius: '12px',
+                                        border: '1px solid #e2e8f0',
+                                    }}
+                                />
+                                <Legend />
+                                <Bar dataKey="Receita" fill="#10b981" radius={[6, 6, 0, 0]} />
+                                <Bar dataKey="Despesas" fill="#ef4444" radius={[6, 6, 0, 0]} />
+                            </BarChart>
+                        </ResponsiveContainer>
                     </div>
                 </div>
 
-                <div className="stat-card success">
-                    <div className="stat-card-content">
-                        <div>
-                            <p className="stat-label">Receita do Mês</p>
-                            <p className="stat-value">
-                                R$ {(viewingHistoricalMonth ? selectedSnapshot!.revenue : thisMonthRevenue).toLocaleString('pt-BR')}
-                            </p>
-                            {!viewingHistoricalMonth && (
-                                <p className="stat-sublabel">Esperado: R$ {expectedRevenue.toLocaleString('pt-BR')}</p>
-                            )}
-                        </div>
-                        <div className="stat-icon success">
-                            <DollarSign size={24} />
-                        </div>
-                    </div>
-                </div>
-
-                <div className="stat-card warning">
-                    <div className="stat-card-content">
-                        <div>
-                            <p className="stat-label">
-                                {viewingHistoricalMonth ? 'Inadimplentes (Fechamento)' : 'Inadimplentes'}
-                            </p>
-                            <p className="stat-value">
-                                {viewingHistoricalMonth ? selectedSnapshot!.overdueCount : overdueStudents.length}
-                            </p>
-                        </div>
-                        <div className="stat-icon warning">
-                            <AlertCircle size={24} />
-                        </div>
-                    </div>
-                </div>
-
-                <div className="stat-card accent">
-                    <div className="stat-card-content">
-                        <div>
-                            <p className="stat-label">
-                                {viewingHistoricalMonth ? 'Presenças do Mês' : 'Presenças Hoje'}
-                            </p>
-                            <p className="stat-value">
-                                {viewingHistoricalMonth ? selectedSnapshot!.attendanceCount : todayAttendance.length}
-                            </p>
-                        </div>
-                        <div className="stat-icon danger">
-                            <Clock size={24} />
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            {/* Financial Summary */}
-            <div className="chart-container">
-                <h3 className="chart-title">💰 Resumo Financeiro do Mês</h3>
-                <div className="grid grid-cols-3 gap-4 mt-4" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '1rem' }}>
-                    <div className="p-4 bg-green-100 rounded-lg text-center" style={{ background: '#dcfce7', borderRadius: '8px', padding: '1rem' }}>
-                        <p className="text-sm text-green-800" style={{ color: '#166534' }}>Receita</p>
-                        <p className="text-2xl font-bold text-green-600" style={{ fontSize: '1.5rem', fontWeight: 700, color: '#16a34a' }}>
-                            R$ {(viewingHistoricalMonth ? selectedSnapshot!.revenue : thisMonthRevenue).toLocaleString('pt-BR')}
-                        </p>
-                    </div>
-                    <div className="p-4 bg-red-100 rounded-lg text-center" style={{ background: '#fee2e2', borderRadius: '8px', padding: '1rem' }}>
-                        <p className="text-sm text-red-800" style={{ color: '#991b1b' }}>Despesas</p>
-                        <p className="text-2xl font-bold text-red-600" style={{ fontSize: '1.5rem', fontWeight: 700, color: '#dc2626' }}>
-                            R$ {(viewingHistoricalMonth ? selectedSnapshot!.expenses : thisMonthExpenseTotal).toLocaleString('pt-BR')}
-                        </p>
-                    </div>
-                    <div
-                        className="p-4 rounded-lg text-center"
-                        style={{
-                            background: (viewingHistoricalMonth ? selectedSnapshot!.profit : thisMonthRevenue - thisMonthExpenseTotal) >= 0 ? '#dbeafe' : '#fee2e2',
-                            borderRadius: '8px',
-                            padding: '1rem'
-                        }}
-                    >
-                        <p className="text-sm" style={{ color: (viewingHistoricalMonth ? selectedSnapshot!.profit : thisMonthRevenue - thisMonthExpenseTotal) >= 0 ? '#1e40af' : '#991b1b' }}>Lucro</p>
-                        <p className="text-2xl font-bold" style={{ fontSize: '1.5rem', fontWeight: 700, color: (viewingHistoricalMonth ? selectedSnapshot!.profit : thisMonthRevenue - thisMonthExpenseTotal) >= 0 ? '#1e40af' : '#dc2626' }}>
-                            R$ {(viewingHistoricalMonth ? selectedSnapshot!.profit : thisMonthRevenue - thisMonthExpenseTotal).toLocaleString('pt-BR')}
-                        </p>
-                    </div>
-                </div>
-            </div>
-
-            {/* Charts */}
-            <div className="grid md:grid-cols-2 gap-6" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '1.5rem' }}>
-                <div className="chart-container">
-                    <h3 className="chart-title">📊 Receita vs Despesas (6 meses)</h3>
-                    <ResponsiveContainer width="100%" height={250}>
-                        <BarChart data={getRevenueChartData()}>
-                            <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                            <XAxis dataKey="month" tick={{ fontSize: 12 }} />
-                            <YAxis tick={{ fontSize: 12 }} />
-                            <Tooltip formatter={(value: number) => `R$ ${value.toLocaleString('pt-BR')}`} />
-                            <Legend />
-                            <Bar dataKey="receita" name="Receita" fill="#16a34a" radius={[4, 4, 0, 0]} />
-                            <Bar dataKey="despesa" name="Despesa" fill="#dc2626" radius={[4, 4, 0, 0]} />
-                        </BarChart>
-                    </ResponsiveContainer>
-                </div>
-
-                <div className="chart-container">
-                    <h3 className="chart-title">🥧 Distribuição por Plano</h3>
-                    <ResponsiveContainer width="100%" height={250}>
-                        <PieChart>
-                            <Pie
-                                data={getPlanDistribution()}
-                                cx="50%"
-                                cy="50%"
-                                innerRadius={50}
-                                outerRadius={80}
-                                dataKey="value"
-                                nameKey="name"
-                                label={({ name, value }) => `${name}: ${value}`}
+                <div className="card p-5 space-y-4">
+                    <div className="flex items-center justify-between gap-2">
+                        <h3 className="font-display font-bold text-slate-900 dark:text-white text-base">
+                            Alunos por Plano
+                        </h3>
+                        <div className="flex bg-slate-100 dark:bg-slate-800 p-0.5 rounded-lg text-xs font-semibold">
+                            <button
+                                type="button"
+                                onClick={() => setPlanChartMode('plan')}
+                                className={`px-2 py-1 rounded-md ${
+                                    planChartMode === 'plan'
+                                        ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-sm'
+                                        : 'text-slate-500'
+                                }`}
                             >
-                                {getPlanDistribution().map((_, index) => (
-                                    <Cell key={`cell-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
-                                ))}
-                            </Pie>
-                            <Tooltip />
-                        </PieChart>
-                    </ResponsiveContainer>
-                </div>
-            </div>
+                                Plano
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setPlanChartMode('category')}
+                                className={`px-2 py-1 rounded-md ${
+                                    planChartMode === 'category'
+                                        ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-sm'
+                                        : 'text-slate-500'
+                                }`}
+                            >
+                                Categoria
+                            </button>
+                        </div>
+                    </div>
 
-            {/* Alerts */}
-            {overdueStudents.length > 0 && (
-                <div className="alert alert-danger">
-                    <AlertCircle size={20} />
-                    <div className="alert-content">
-                        <p className="alert-title">⚠️ Alunos com Pagamento Atrasado</p>
-                        <div className="mt-2 space-y-2">
-                            {overdueStudents.map(s => (
-                                <div key={s.id} className="flex justify-between text-sm py-1 border-b border-red-200 last:border-0" style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0' }}>
-                                    <span>{s.name}</span>
-                                    <span className="font-bold">
-                                        {Math.abs(getDaysUntilDue(s.nextDue)) === 1 ? '1 dia atrasado' : `${Math.abs(getDaysUntilDue(s.nextDue))} dias atrasado`}
-                                    </span>
+                    {planDistribution.length === 0 ? (
+                        <p className="text-sm text-slate-500 py-8 text-center">
+                            Nenhum aluno ativo cadastrado.
+                        </p>
+                    ) : (
+                        <div className="space-y-3 max-h-64 overflow-y-auto pr-1">
+                            {planDistribution.map((item) => (
+                                <div key={item.label} className="space-y-1">
+                                    <div className="flex items-center justify-between text-xs">
+                                        <span className="font-semibold text-slate-700 dark:text-slate-200 truncate pr-2">
+                                            {item.label}
+                                        </span>
+                                        <span className="font-bold text-slate-900 dark:text-white shrink-0">
+                                            {item.count} ({item.percent}%)
+                                        </span>
+                                    </div>
+                                    <div className="w-full h-2 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                                        <div
+                                            className="h-full bg-rose-500 rounded-full"
+                                            style={{ width: `${item.percent}%` }}
+                                        />
+                                    </div>
                                 </div>
                             ))}
                         </div>
-                    </div>
-                </div>
-            )}
-
-            {dueThisWeek.length > 0 && (
-                <div className="alert alert-warning">
-                    <Clock size={20} />
-                    <div className="alert-content">
-                        <p className="alert-title">📅 Vencimentos na Semana</p>
-                        <div className="mt-2 space-y-2">
-                            {dueThisWeek.map(s => {
-                                const days = getDaysUntilDue(s.nextDue);
-                                return (
-                                    <div key={s.id} className="flex justify-between text-sm py-1 border-b border-yellow-200" style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0' }}>
-                                        <span>{s.name}</span>
-                                        <span className="font-bold">
-                                            {days === 0 ? 'Hoje!' : days === 1 ? 'Amanhã' : `Em ${days} dias`}
-                                        </span>
-                                    </div>
-                                );
-                            })}
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* Notificação de fechamento de mês */}
-            {monthClosed && (
-                <div className="alert alert-success" style={{ background: '#dcfce7', border: '1px solid #16a34a' }}>
-                    <History size={20} />
-                    <div className="alert-content">
-                        <p className="alert-title" style={{ color: '#166534' }}>
-                            ✅ Mês anterior fechado automaticamente!
-                        </p>
-                        <p style={{ color: '#166534', fontSize: '0.875rem' }}>
-                            O fechamento do mês foi salvo no histórico. O dashboard agora exibe dados do novo mês.
-                        </p>
-                    </div>
-                </div>
-            )}
-
-            {/* Histórico de Meses Anteriores */}
-            {monthlyHistory.length > 0 && (
-                <div className="chart-container">
-                    <div
-                        className="chart-title flex justify-between items-center cursor-pointer"
-                        onClick={() => setHistoryCollapsed(!historyCollapsed)}
-                        style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }}
-                    >
-                        <span>
-                            <History size={18} style={{ display: 'inline', marginRight: '0.5rem', verticalAlign: 'middle' }} />
-                            📅 Histórico de Meses ({monthlyHistory.length})
-                        </span>
-                        <button
-                            className="btn btn-sm"
-                            style={{ padding: '0.25rem', background: 'transparent', border: 'none' }}
-                            title={historyCollapsed ? 'Expandir' : 'Minimizar'}
-                        >
-                            {historyCollapsed ? <ChevronDown size={18} /> : <ChevronUp size={18} />}
-                        </button>
-                    </div>
-                    {!historyCollapsed && (
-                        <div className="mt-4" style={{ marginTop: '1rem' }}>
-                            <table className="table" style={{ width: '100%', borderCollapse: 'collapse' }}>
-                                <thead>
-                                    <tr style={{ borderBottom: '2px solid #e5e7eb', textAlign: 'left' }}>
-                                        <th style={{ padding: '0.75rem', fontWeight: 600 }}>Mês</th>
-                                        <th style={{ padding: '0.75rem', fontWeight: 600, textAlign: 'right' }}>Receita</th>
-                                        <th style={{ padding: '0.75rem', fontWeight: 600, textAlign: 'right' }}>Despesas</th>
-                                        <th style={{ padding: '0.75rem', fontWeight: 600, textAlign: 'right' }}>Lucro</th>
-                                        <th style={{ padding: '0.75rem', fontWeight: 600, textAlign: 'center' }}>Alunos</th>
-                                        <th style={{ padding: '0.75rem', fontWeight: 600, textAlign: 'center' }}>Presenças</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {monthlyHistory.map(snapshot => (
-                                        <tr key={snapshot.id} style={{ borderBottom: '1px solid #e5e7eb' }}>
-                                            <td style={{ padding: '0.75rem', fontWeight: 500 }}>
-                                                {getMonthName(snapshot.month)} {snapshot.year}
-                                            </td>
-                                            <td style={{ padding: '0.75rem', textAlign: 'right', color: '#16a34a' }}>
-                                                R$ {snapshot.revenue.toLocaleString('pt-BR')}
-                                            </td>
-                                            <td style={{ padding: '0.75rem', textAlign: 'right', color: '#dc2626' }}>
-                                                R$ {snapshot.expenses.toLocaleString('pt-BR')}
-                                            </td>
-                                            <td style={{
-                                                padding: '0.75rem',
-                                                textAlign: 'right',
-                                                color: snapshot.profit >= 0 ? '#1e40af' : '#dc2626',
-                                                fontWeight: 600
-                                            }}>
-                                                R$ {snapshot.profit.toLocaleString('pt-BR')}
-                                            </td>
-                                            <td style={{ padding: '0.75rem', textAlign: 'center' }}>
-                                                {snapshot.activeStudents}
-                                            </td>
-                                            <td style={{ padding: '0.75rem', textAlign: 'center' }}>
-                                                {snapshot.attendanceCount}
-                                            </td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                            <p style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: '0.5rem', textAlign: 'center' }}>
-                                Histórico de fechamentos mensais (registros imutáveis)
-                            </p>
-                        </div>
                     )}
                 </div>
-            )}
+            </div>
+
+            {/* Histórico de Meses Fechados */}
+            <div className="card overflow-hidden">
+                <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                        <h3 className="font-display font-bold text-slate-900 dark:text-white text-base">
+                            Histórico Mensal Consolidado
+                        </h3>
+                        <p className="text-xs text-slate-500 dark:text-slate-400">
+                            Fechamento automático dos meses já encerrados
+                        </p>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={handleRepairSnapshots}
+                        disabled={isRepairing}
+                        className="btn btn-secondary btn-sm"
+                    >
+                        <RefreshCw className={`w-3.5 h-3.5 ${isRepairing ? 'animate-spin' : ''}`} />
+                        {isRepairing ? 'Recalculando...' : 'Recalcular Histórico'}
+                    </button>
+                </div>
+
+                {pastSnapshots.length === 0 ? (
+                    <p className="p-6 text-sm text-slate-500 text-center">
+                        Nenhum mês anterior encerrado ainda. Clique em "Recalcular Histórico" se importou dados antigos.
+                    </p>
+                ) : (
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-sm text-left">
+                            <thead className="bg-slate-50 dark:bg-slate-800/60 text-xs uppercase text-slate-500 dark:text-slate-400">
+                                <tr>
+                                    <th className="px-5 py-3 font-bold">Mês</th>
+                                    <th className="px-5 py-3 font-bold">Receita</th>
+                                    <th className="px-5 py-3 font-bold">Despesas</th>
+                                    <th className="px-5 py-3 font-bold">Lucro</th>
+                                    <th className="px-5 py-3 font-bold">Presenças</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                                {pastSnapshots.map((snap) => (
+                                    <tr
+                                        key={snap.id}
+                                        className="hover:bg-slate-50/70 dark:hover:bg-slate-800/30 cursor-pointer"
+                                        onClick={() => setSelectedMonthId(snap.id)}
+                                    >
+                                        <td className="px-5 py-3 font-semibold text-slate-900 dark:text-white">
+                                            {getMonthName(snap.month)} / {snap.year}
+                                        </td>
+                                        <td className="px-5 py-3 font-semibold text-emerald-600 dark:text-emerald-400">
+                                            {formatCurrencyBRL(snap.revenue)}
+                                        </td>
+                                        <td className="px-5 py-3 text-red-600 dark:text-red-400">
+                                            {formatCurrencyBRL(snap.expenses)}
+                                        </td>
+                                        <td
+                                            className={`px-5 py-3 font-bold ${
+                                                snap.profit >= 0
+                                                    ? 'text-slate-900 dark:text-white'
+                                                    : 'text-red-600'
+                                            }`}
+                                        >
+                                            {formatCurrencyBRL(snap.profit)}
+                                        </td>
+                                        <td className="px-5 py-3 text-slate-600 dark:text-slate-300">
+                                            {snap.attendanceCount}
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+            </div>
         </div>
     );
 }

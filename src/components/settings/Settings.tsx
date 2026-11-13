@@ -1,537 +1,761 @@
-import { useRef, useState, useEffect } from 'react';
-import { Download, Upload, Trash2, ShieldCheck, Info, KeyRound, Lock, Eye, EyeOff } from 'lucide-react';
-import { db } from '../../services/db';
+import React, { useEffect, useState } from 'react';
+import {
+    Palette,
+    Cloud,
+    Database,
+    Layers,
+    Upload,
+    Download,
+    RotateCcw,
+    RefreshCw,
+    Lock,
+    CheckCircle2,
+    LogOut,
+    Sparkles,
+    Sun,
+    Moon,
+    AlertTriangle,
+} from 'lucide-react';
 import { AppData } from '../../types';
+import { db } from '../../services/db';
+import { usePersonalPlans, usePlans, useSettings } from '../../hooks/useGymStore';
+import { saveSetting, saveSettingsBatch } from '../../services/dataAccess';
+import { buildBackupExportPayload } from '../../services/backupCleaner';
+import { syncAndRepairMonthlySnapshots } from '../../services/MonthlyHistoryService';
+import {
+    clearLocalSupabaseConfig,
+    getSupabaseConfig,
+    hasEnvSupabaseConfig,
+    isSupabaseConfigured,
+    saveLocalSupabaseConfig,
+} from '../../services/supabase';
+import {
+    forceUploadLocalToCloud,
+    pushBatchRecords,
+    refreshSyncStatusFromEnvironment,
+    signInCloud,
+    signOutCloud,
+    signUpCloud,
+    startRealtimeSync,
+    syncAll,
+    useSyncStatus,
+} from '../../services/syncService';
+import { BrandMark } from '../common/BrandMark';
 import { PlanManager } from './PlanManager';
 import { PersonalPlanManager } from './PersonalPlanManager';
+import { BackupImportModal } from './BackupImportModal';
+import { ConfirmModal } from '../UI';
+import { useToast } from '../../contexts/ToastContext';
 
-export function Settings() {
-    const fileInputRef = useRef<HTMLInputElement>(null);
-    const logoFileInputRef = useRef<HTMLInputElement>(null);
+interface SettingsProps {
+    darkMode: boolean;
+    onToggleDarkMode: () => void;
+}
 
-    // Identidade da Academia State
-    const [nameInput, setNameInput] = useState('RESISTÊNCIA MUAY THAI');
-    const [logoPreview, setLogoPreview] = useState('🥊');
-    const [logoError, setLogoError] = useState('');
+type SettingsTab = 'identity' | 'plans' | 'cloud' | 'backup';
 
-    // Senha State
-    const [currentPassword, setCurrentPassword] = useState('');
-    const [newPassword, setNewPassword] = useState('');
-    const [confirmNewPassword, setConfirmNewPassword] = useState('');
-    const [showPassword, setShowPassword] = useState(false);
-    const [passwordMessage, setPasswordMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+const MAX_RAW_UPLOAD_BYTES = 2 * 1024 * 1024; // 2 MB
 
-    useEffect(() => {
-        const loadIdentity = async () => {
-            const savedName = await db.settings.get('gymName');
-            const savedLogo = await db.settings.get('gymLogo');
-            if (savedName?.value) {
-                setNameInput(savedName.value);
-            }
-            if (savedLogo?.value) {
-                setLogoPreview(savedLogo.value);
-            }
-        };
-        loadIdentity();
-    }, []);
-
-    const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
-        if (!file) return;
-
-        setLogoError('');
-
-        // Validação de tamanho: máximo 1MB
-        const MAX_SIZE = 1024 * 1024;
-        if (file.size > MAX_SIZE) {
-            setLogoError('A logo deve ter no máximo 1MB.');
-            if (logoFileInputRef.current) logoFileInputRef.current.value = '';
-            return;
-        }
-
-        // Validação de tipo de arquivo
-        if (!file.type.startsWith('image/')) {
-            setLogoError('Por favor, selecione um arquivo de imagem válido.');
-            if (logoFileInputRef.current) logoFileInputRef.current.value = '';
-            return;
-        }
-
+/**
+ * Redimensiona/otimiza automaticamente imagens enviadas para a logo (máx 320px)
+ * permitindo que o usuário envie fotos ou logos modernas sem erro de 100KB
+ * e mantendo o armazenamento/sincronização leve.
+ */
+function resizeLogoImage(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
         const reader = new FileReader();
-        reader.onload = (event) => {
-            const base64Content = event.target?.result as string;
-
+        reader.onerror = () => reject(new Error('Falha ao ler arquivo.'));
+        reader.onload = () => {
+            const result = reader.result as string;
+            if (file.type === 'image/svg+xml') {
+                resolve(result);
+                return;
+            }
             const img = new Image();
+            img.onerror = () => reject(new Error('Imagem inválida.'));
             img.onload = () => {
-                const maxDim = 800;
-                if (img.width > maxDim || img.height > maxDim) {
-                    setLogoError(`Dimensões recomendadas: máx 800x800px (Sua imagem: ${img.width}x${img.height}px). O upload foi bloqueado para evitar distorções no menu.`);
-                    if (logoFileInputRef.current) logoFileInputRef.current.value = '';
+                const maxSide = 320;
+                let { width, height } = img;
+                if (width > maxSide || height > maxSide) {
+                    const ratio = Math.min(maxSide / width, maxSide / height);
+                    width = Math.round(width * ratio);
+                    height = Math.round(height * ratio);
+                }
+                const canvas = document.createElement('canvas');
+                canvas.width = width;
+                canvas.height = height;
+                const ctx = canvas.getContext('2d');
+                if (!ctx) {
+                    resolve(result);
                     return;
                 }
-                setLogoPreview(base64Content);
+                ctx.drawImage(img, 0, 0, width, height);
+                resolve(canvas.toDataURL('image/png', 0.9));
             };
-            img.onerror = () => {
-                setLogoError('Erro ao processar imagem.');
-            };
-            img.src = base64Content;
+            img.src = result;
         };
         reader.readAsDataURL(file);
-    };
+    });
+}
+
+export function Settings({ darkMode, onToggleDarkMode }: SettingsProps) {
+    const settings = useSettings();
+    const plans = usePlans();
+    const personalPlans = usePersonalPlans();
+    const sync = useSyncStatus();
+    const { showToast } = useToast();
+
+    const [activeTab, setActiveTab] = useState<SettingsTab>('identity');
+
+    // Identidade
+    const [gymNameInput, setGymNameInput] = useState('RESISTÊNCIA MUAY THAI');
+    const [gymLogoInput, setGymLogoInput] = useState('🥊');
+
+    // Senha local
+    const [newPassword, setNewPassword] = useState('');
+    const [confirmPassword, setConfirmPassword] = useState('');
+
+    // Nuvem / Supabase
+    const envConfigured = hasEnvSupabaseConfig();
+    const currentCloudConfig = getSupabaseConfig();
+    const [supaUrl, setSupaUrl] = useState(currentCloudConfig?.url || '');
+    const [supaKey, setSupaKey] = useState(currentCloudConfig?.anonKey || '');
+    const [authEmail, setAuthEmail] = useState('');
+    const [authPass, setAuthPass] = useState('');
+    const [authLoading, setAuthLoading] = useState(false);
+    const [confirmForcePush, setConfirmForcePush] = useState(false);
+
+    // Backup
+    const [importModalOpen, setImportModalOpen] = useState(false);
+    const [pendingBackupData, setPendingBackupData] = useState<AppData | null>(null);
+    const [pendingBackupName, setPendingBackupName] = useState('');
+    const [isRepairing, setIsRepairing] = useState(false);
+
+    useEffect(() => {
+        const nameSet = settings.find((s) => s.key === 'gymName')?.value;
+        const logoSet = settings.find((s) => s.key === 'gymLogo')?.value;
+        if (nameSet) setGymNameInput(String(nameSet));
+        if (logoSet) setGymLogoInput(String(logoSet));
+    }, [settings]);
 
     const handleSaveIdentity = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!nameInput.trim()) {
-            alert('O nome da academia não pode ficar em branco.');
+        if (!gymNameInput.trim()) {
+            showToast('warning', 'Informe o nome da academia.');
             return;
         }
-        try {
-            await db.settings.put({ key: 'gymName', value: nameInput.trim() });
-            await db.settings.put({ key: 'gymLogo', value: logoPreview });
-            alert('Identidade da academia atualizada com sucesso!');
-        } catch (err) {
-            console.error(err);
-            alert('Erro ao salvar identidade.');
-        }
+        await saveSettingsBatch({
+            gymName: gymNameInput.trim(),
+            gymLogo: gymLogoInput || '🥊',
+        });
+        showToast('success', 'Identidade da academia salva!');
     };
 
     const handleResetIdentity = async () => {
-        if (confirm('Deseja resetar o nome e a logo para o padrão?')) {
-            try {
-                await db.settings.put({ key: 'gymName', value: 'RESISTÊNCIA MUAY THAI' });
-                await db.settings.put({ key: 'gymLogo', value: '🥊' });
-                setNameInput('RESISTÊNCIA MUAY THAI');
-                setLogoPreview('🥊');
-                setLogoError('');
-                if (logoFileInputRef.current) logoFileInputRef.current.value = '';
-                alert('Identidade restaurada para o padrão.');
-            } catch (err) {
-                console.error(err);
-                alert('Erro ao resetar identidade.');
-            }
-        }
+        setGymNameInput('RESISTÊNCIA MUAY THAI');
+        setGymLogoInput('🥊');
+        await saveSettingsBatch({
+            gymName: 'RESISTÊNCIA MUAY THAI',
+            gymLogo: '🥊',
+        });
+        showToast('info', 'Identidade restaurada para o padrão.');
     };
 
-    const handleChangePassword = async (e: React.FormEvent) => {
-        e.preventDefault();
-        setPasswordMessage(null);
-
-        if (!newPassword || newPassword.length < 4) {
-            setPasswordMessage({ type: 'error', text: 'A nova senha deve ter pelo menos 4 caracteres.' });
-            return;
-        }
-
-        if (newPassword !== confirmNewPassword) {
-            setPasswordMessage({ type: 'error', text: 'A confirmação de senha não coincide.' });
-            return;
-        }
-
-        try {
-            const savedPassword = await db.settings.get('appPassword');
-            // Se já existia senha salva, exigir a senha atual correta
-            if (savedPassword?.value && savedPassword.value !== currentPassword) {
-                setPasswordMessage({ type: 'error', text: 'A senha atual informada está incorreta.' });
-                return;
-            }
-
-            await db.settings.put({ key: 'appPassword', value: newPassword });
-            setPasswordMessage({ type: 'success', text: 'Senha alterada com sucesso!' });
-            setCurrentPassword('');
-            setNewPassword('');
-            setConfirmNewPassword('');
-        } catch (error) {
-            console.error('Erro ao trocar senha:', error);
-            setPasswordMessage({ type: 'error', text: 'Erro ao salvar nova senha.' });
-        }
-    };
-
-    const handleExport = async () => {
-        try {
-            const students = await db.students.toArray();
-            const payments = await db.payments.toArray();
-            const attendance = await db.attendance.toArray();
-            const expenses = await db.expenses.toArray();
-            const dailyNotes = await db.dailyNotes.toArray();
-            const plans = await db.plans.toArray();
-            const personalPlans = await db.personalPlans.toArray();
-            const monthlySnapshots = await db.monthlySnapshots.toArray();
-            const settingsPairs = await db.settings.toArray();
-
-            const savedName = settingsPairs.find(s => s.key === 'gymName')?.value || nameInput;
-            const savedLogo = settingsPairs.find(s => s.key === 'gymLogo')?.value || logoPreview;
-
-            const backupData: AppData = {
-                students,
-                payments,
-                attendance,
-                expenses,
-                dailyNotes,
-                plans,
-                personalPlans,
-                monthlySnapshots,
-                settings: settingsPairs,
-                gymName: savedName,
-                gymLogo: savedLogo,
-                lastBackup: new Date().toISOString(),
-                darkMode: settingsPairs.find(s => s.key === 'darkMode')?.value || false,
-                version: 3,
-                lastModified: new Date().toISOString()
-            };
-
-            const fileName = `backup_academia_${new Date().toISOString().split('T')[0]}.json`;
-            const json = JSON.stringify(backupData, null, 2);
-            const blob = new Blob([json], { type: 'application/json' });
-            const href = URL.createObjectURL(blob);
-
-            const link = document.createElement('a');
-            link.href = href;
-            link.download = fileName;
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-
-            alert('Backup exportado com sucesso! Guarde este arquivo em local seguro.');
-        } catch (error) {
-            console.error(error);
-            alert('Erro ao exportar backup.');
-        }
-    };
-
-    const handleImport = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (!file) return;
-
-        const MAX_SIZE = 10 * 1024 * 1024;
-        if (file.size > MAX_SIZE) {
-            alert('Arquivo muito grande! O tamanho máximo é 10MB.');
-            e.target.value = '';
+        if (!file.type.startsWith('image/')) {
+            showToast('warning', 'Selecione um arquivo de imagem (PNG, JPG, WebP ou SVG).');
             return;
         }
-
-        if (!file.name.endsWith('.json')) {
-            alert('Por favor, selecione um arquivo JSON válido.');
-            e.target.value = '';
+        if (file.size > MAX_RAW_UPLOAD_BYTES) {
+            showToast('warning', 'A imagem deve ter no máximo 2 MB.');
             return;
         }
+        try {
+            const optimized = await resizeLogoImage(file);
+            setGymLogoInput(optimized);
+            showToast('success', 'Logo carregada e otimizada! Clique em "Salvar Identidade".');
+        } catch {
+            showToast('error', 'Não foi possível processar esta imagem.');
+        } finally {
+            e.target.value = '';
+        }
+    };
 
-        if (confirm('ATENÇÃO: Importar um backup irá SUBSTITUIR ou MESCLAR com os dados atuais.\n\nIMPORTANTE: Apenas importe backups confiáveis. Deseja continuar?')) {
-            const reader = new FileReader();
-            reader.onload = async (event) => {
-                try {
-                    const json = event.target?.result as string;
+    const handleSaveLocalPassword = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (newPassword.length < 4) {
+            showToast('warning', 'Use uma senha com pelo menos 4 caracteres.');
+            return;
+        }
+        if (newPassword !== confirmPassword) {
+            showToast('warning', 'As senhas não conferem.');
+            return;
+        }
+        await db.settings.put({ key: 'appPassword', value: newPassword });
+        setNewPassword('');
+        setConfirmPassword('');
+        showToast('success', 'Senha local deste aparelho atualizada!');
+    };
 
-                    if (!json || json.trim().length === 0) {
-                        throw new Error('Arquivo vazio ou inválido');
-                    }
+    const handleSaveCloudConfig = (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!supaUrl.trim().startsWith('https://') || !supaKey.trim()) {
+            showToast('warning', 'Preencha a URL (https://...) e a Anon Key do Supabase.');
+            return;
+        }
+        saveLocalSupabaseConfig(supaUrl.trim(), supaKey.trim());
+        refreshSyncStatusFromEnvironment();
+        showToast('success', 'Conexão Supabase salva! Agora entre com seu e-mail e senha abaixo.');
+    };
 
-                    let data: AppData;
-                    try {
-                        data = JSON.parse(json) as AppData;
-                    } catch {
-                        throw new Error('Arquivo JSON corrompido');
-                    }
+    const handleClearCloudConfig = async () => {
+        await signOutCloud();
+        clearLocalSupabaseConfig();
+        setSupaUrl('');
+        setSupaKey('');
+        refreshSyncStatusFromEnvironment();
+        showToast('info', 'Conexão local do Supabase removida.');
+    };
 
-                    if (!data || typeof data !== 'object') {
-                        throw new Error('Estrutura de dados inválida');
-                    }
-
-                    const requiredArrays = ['students', 'payments', 'attendance', 'expenses', 'dailyNotes'];
-                    for (const key of requiredArrays) {
-                        if (!Array.isArray(data[key as keyof AppData])) {
-                            throw new Error(`Campo '${key}' deve ser um array`);
-                        }
-                    }
-
-                    const sanitizedData: AppData = {
-                        students: data.students || [],
-                        payments: data.payments || [],
-                        attendance: data.attendance || [],
-                        expenses: data.expenses || [],
-                        dailyNotes: data.dailyNotes || [],
-                        plans: data.plans || [],
-                        personalPlans: data.personalPlans || [],
-                        monthlySnapshots: data.monthlySnapshots || [],
-                        settings: data.settings || [],
-                        gymName: data.gymName,
-                        gymLogo: data.gymLogo,
-                        darkMode: Boolean(data.darkMode),
-                        version: Number(data.version) || 1,
-                        lastModified: data.lastModified || new Date().toISOString(),
-                        lastBackup: data.lastBackup
-                    };
-
-                    await db.transaction('rw', [db.students, db.payments, db.attendance, db.expenses, db.dailyNotes, db.plans, db.personalPlans, db.monthlySnapshots, db.settings], async () => {
-                        if (sanitizedData.students.length > 0) await db.students.bulkPut(sanitizedData.students);
-                        if (sanitizedData.payments.length > 0) await db.payments.bulkPut(sanitizedData.payments);
-                        if (sanitizedData.attendance.length > 0) await db.attendance.bulkPut(sanitizedData.attendance);
-                        if (sanitizedData.expenses.length > 0) await db.expenses.bulkPut(sanitizedData.expenses);
-                        if (sanitizedData.dailyNotes.length > 0) await db.dailyNotes.bulkPut(sanitizedData.dailyNotes);
-                        if (sanitizedData.plans && sanitizedData.plans.length > 0) await db.plans.bulkPut(sanitizedData.plans);
-                        if (sanitizedData.personalPlans && sanitizedData.personalPlans.length > 0) await db.personalPlans.bulkPut(sanitizedData.personalPlans);
-                        if (sanitizedData.monthlySnapshots && sanitizedData.monthlySnapshots.length > 0) await db.monthlySnapshots.bulkPut(sanitizedData.monthlySnapshots);
-
-                        // Restaura configurações e identidade
-                        if (sanitizedData.settings && sanitizedData.settings.length > 0) {
-                            await db.settings.bulkPut(sanitizedData.settings);
-                        } else {
-                            if (sanitizedData.gymName) await db.settings.put({ key: 'gymName', value: sanitizedData.gymName });
-                            if (sanitizedData.gymLogo) await db.settings.put({ key: 'gymLogo', value: sanitizedData.gymLogo });
-                        }
-                    });
-
-                    alert('Dados importados com sucesso! A página será recarregada.');
-                    window.location.reload();
-                } catch (error: any) {
-                    console.error(error);
-                    alert(`Erro ao importar arquivo: ${error.message || 'Erro desconhecido'}`);
+    const handleCloudLogin = async (isSignUp: boolean) => {
+        if (!authEmail.trim() || authPass.length < 6) {
+            showToast('warning', 'Informe um e-mail válido e senha com pelo menos 6 caracteres.');
+            return;
+        }
+        setAuthLoading(true);
+        try {
+            if (isSignUp) {
+                const res = await signUpCloud(authEmail.trim(), authPass);
+                if (res.error) {
+                    showToast('error', res.error);
+                    return;
                 }
-            };
-            reader.readAsText(file);
+                if (res.needsConfirmation) {
+                    showToast('info', 'Conta criada! Confirme o e-mail recebido antes de entrar.');
+                    return;
+                }
+                await syncAll();
+                startRealtimeSync();
+                showToast('success', 'Conta criada e conectada à nuvem!');
+            } else {
+                const res = await signInCloud(authEmail.trim(), authPass);
+                if (res.error) {
+                    showToast('error', res.error);
+                    return;
+                }
+                await syncAll();
+                startRealtimeSync();
+                showToast('success', 'Conectado e sincronizado com a nuvem!');
+            }
+            setAuthPass('');
+        } finally {
+            setAuthLoading(false);
         }
+    };
 
+    const handleForceUploadCloud = async () => {
+        setConfirmForcePush(false);
+        try {
+            await forceUploadLocalToCloud();
+            showToast('success', 'Todos os dados locais foram enviados para o Supabase!');
+        } catch {
+            showToast('error', 'Falha ao enviar dados para a nuvem.');
+        }
+    };
+
+    const handleExportJson = async () => {
+        const { data, filename } = await buildBackupExportPayload();
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(url);
+        await saveSetting('lastBackup', new Date().toISOString());
+        showToast('success', `Backup ${filename} baixado com sucesso!`);
+    };
+
+    const handleChooseImportFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = () => {
+            try {
+                const parsed = JSON.parse(String(reader.result));
+                setPendingBackupData(parsed);
+                setPendingBackupName(file.name);
+                setImportModalOpen(true);
+            } catch {
+                showToast('error', 'Arquivo JSON inválido ou corrompido.');
+            }
+        };
+        reader.readAsText(file);
         e.target.value = '';
     };
 
-    const handleReset = async () => {
-        const confirm1 = confirm('PERIGO: Isso apagará TODOS os dados do sistema (alunos, pagamentos, etc). Você tem certeza?');
-        if (confirm1) {
-            const confirm2 = confirm('Absoluta certeza? Essa ação não pode ser desfeita.');
-            if (confirm2) {
-                await db.delete();
-                alert('Sistema resetado. A página será recarregada.');
-                window.location.reload();
-            }
+    const handleRepairSnapshots = async () => {
+        setIsRepairing(true);
+        try {
+            const { updated, removedFuture } = await syncAndRepairMonthlySnapshots();
+            const snaps = await db.monthlySnapshots.toArray();
+            await pushBatchRecords('monthlySnapshots', snaps).catch(() => {});
+            showToast(
+                'success',
+                `Histórico recalculado (${updated} mês(es) corrigido(s), ${removedFuture} futuro(s) removido(s)).`
+            );
+        } catch {
+            showToast('error', 'Erro ao recalcular histórico.');
+        } finally {
+            setIsRepairing(false);
         }
     };
 
+    const cloudConfigured = isSupabaseConfigured();
+
     return (
-        <div className="space-y-6 animate-fade-in max-w-4xl mx-auto">
-            <h2 className="text-2xl font-bold mb-6">Configurações & Segurança</h2>
+        <div className="space-y-6">
+            <div>
+                <h1 className="font-display text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white tracking-tight">
+                    Configurações
+                </h1>
+                <p className="text-sm text-slate-500 dark:text-slate-400">
+                    Personalize a academia, configure planos, sincronize PC/Celular e gerencie backups
+                </p>
+            </div>
 
-            <div className="grid md:grid-cols-2 gap-6">
-                {/* Gym Identity Section */}
-                <div className="card">
-                    <div className="card-header">
-                        <h3 className="flex items-center gap-2 font-bold">
-                            <ShieldCheck size={20} /> Identidade da Academia
+            {/* Navegação de Abas */}
+            <div className="flex flex-wrap gap-2 border-b border-slate-200 dark:border-slate-800 pb-3">
+                {[
+                    { id: 'identity', label: 'Identidade & Aparência', icon: <Palette className="w-4 h-4" /> },
+                    { id: 'plans', label: `Planos (${plans.length + personalPlans.length})`, icon: <Layers className="w-4 h-4" /> },
+                    { id: 'cloud', label: 'Nuvem & Celular', icon: <Cloud className="w-4 h-4" /> },
+                    { id: 'backup', label: 'Backup & Limpeza', icon: <Database className="w-4 h-4" /> },
+                ].map((tab) => (
+                    <button
+                        key={tab.id}
+                        type="button"
+                        onClick={() => setActiveTab(tab.id as SettingsTab)}
+                        className={`btn btn-sm ${
+                            activeTab === tab.id ? 'btn-primary' : 'btn-secondary'
+                        }`}
+                    >
+                        {tab.icon}
+                        {tab.label}
+                    </button>
+                ))}
+            </div>
+
+            {/* ABA 1: IDENTIDADE & SEGURANÇA LOCAL */}
+            {activeTab === 'identity' && (
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+                    <form onSubmit={handleSaveIdentity} className="card p-5 space-y-4">
+                        <h3 className="font-display text-lg font-bold text-slate-900 dark:text-white">
+                            Identidade da Academia
                         </h3>
-                    </div>
-                    <form onSubmit={handleSaveIdentity} className="card-body space-y-4">
-                        <p className="text-sm text-gray-600 dark:text-gray-300">
-                            Personalize o nome e a logomarca da sua academia no cabeçalho e login.
-                        </p>
 
-                        <div className="space-y-2">
-                            <label className="text-xs font-semibold text-gray-500">Nome da Academia</label>
-                            <input
-                                type="text"
-                                value={nameInput}
-                                onChange={(e) => setNameInput(e.target.value)}
-                                className="form-input w-full"
-                                placeholder="Nome da Academia"
-                                required
+                        <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3">
+                            <BrandMark
+                                gymName={gymNameInput || 'Academia'}
+                                gymLogo={gymLogoInput}
+                                size="lg"
+                                subtitle="Pré-visualização no menu"
                             />
                         </div>
 
-                        <div className="space-y-2">
-                            <label className="text-xs font-semibold text-gray-500">Logomarca (Logo)</label>
-                            <div className="flex items-center gap-4">
-                                <div className="w-16 h-16 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl flex items-center justify-center overflow-hidden">
-                                    {logoPreview.startsWith('data:image') ? (
-                                        <img src={logoPreview} className="w-full h-full object-contain" alt="Preview Logo" />
-                                    ) : (
-                                        <span className="text-3xl">{logoPreview}</span>
-                                    )}
-                                </div>
-                                <div className="flex-1 space-y-2">
+                        <div>
+                            <label className="label">Nome da Academia</label>
+                            <input
+                                type="text"
+                                value={gymNameInput}
+                                onChange={(e) => setGymNameInput(e.target.value)}
+                                className="input"
+                            />
+                        </div>
+
+                        <div>
+                            <label className="label">Logo (Imagem até 2MB ou Emoji)</label>
+                            <div className="flex flex-wrap items-center gap-2.5">
+                                <label className="btn btn-secondary btn-sm cursor-pointer">
+                                    <Upload className="w-4 h-4" />
+                                    Enviar Imagem
                                     <input
                                         type="file"
-                                        ref={logoFileInputRef}
                                         accept="image/*"
                                         onChange={handleLogoUpload}
                                         className="hidden"
                                     />
-                                    <button
-                                        type="button"
-                                        onClick={() => logoFileInputRef.current?.click()}
-                                        className="btn btn-outline btn-sm w-full justify-center"
-                                    >
-                                        Escolher Imagem
-                                    </button>
-                                    <p className="text-[10px] text-gray-400">
-                                        PNG/JPG, Máx 1MB, Recomendado até 800x800px.
-                                    </p>
-                                </div>
+                                </label>
+                                <input
+                                    type="text"
+                                    value={gymLogoInput.startsWith('data:image') ? '' : gymLogoInput}
+                                    onChange={(e) => setGymLogoInput(e.target.value)}
+                                    placeholder="Ou digite um emoji (ex: 🥊)"
+                                    className="input flex-1"
+                                />
                             </div>
-                            {logoError && (
-                                <p className="text-xs text-red-500 font-semibold bg-red-50 dark:bg-red-950/20 p-2 rounded-lg border border-red-100 dark:border-red-900/30">
-                                    ⚠️ {logoError}
-                                </p>
-                            )}
                         </div>
 
-                        <div className="flex gap-2 pt-2">
-                            <button type="submit" className="btn btn-primary flex-1 justify-center">
-                                Salvar Identidade
-                            </button>
+                        <div className="flex flex-wrap justify-between gap-2 pt-2">
                             <button
                                 type="button"
                                 onClick={handleResetIdentity}
-                                className="btn btn-outline btn-sm"
-                                title="Resetar para o padrão"
+                                className="btn btn-ghost btn-sm"
                             >
+                                <RotateCcw className="w-4 h-4" />
                                 Restaurar Padrão
                             </button>
+                            <button type="submit" className="btn btn-success btn-sm">
+                                Salvar Identidade
+                            </button>
                         </div>
                     </form>
-                </div>
 
-                {/* Alterar Senha */}
-                <div className="card">
-                    <div className="card-header">
-                        <h3 className="flex items-center gap-2 font-bold">
-                            <KeyRound size={20} /> Alterar Senha de Acesso
-                        </h3>
-                    </div>
-                    <form onSubmit={handleChangePassword} className="card-body space-y-4">
-                        <p className="text-sm text-gray-600 dark:text-gray-300">
-                            Atualize a senha de bloqueio do sistema (mínimo de 4 dígitos).
-                        </p>
-
-                        <div className="space-y-2">
-                            <label className="text-xs font-semibold text-gray-500">Senha Atual</label>
-                            <div className="relative">
-                                <input
-                                    type={showPassword ? 'text' : 'password'}
-                                    value={currentPassword}
-                                    onChange={(e) => setCurrentPassword(e.target.value)}
-                                    className="form-input w-full pr-10"
-                                    placeholder="Digite a senha atual"
-                                />
-                                <button
-                                    type="button"
-                                    className="absolute right-3 top-2.5 text-gray-400 hover:text-gray-600"
-                                    onClick={() => setShowPassword(!showPassword)}
-                                >
-                                    {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                                </button>
+                    <div className="space-y-5">
+                        <div className="card p-5 flex items-center justify-between gap-4">
+                            <div>
+                                <h3 className="font-display text-base font-bold text-slate-900 dark:text-white">
+                                    Tema do Sistema
+                                </h3>
+                                <p className="text-xs text-slate-500 dark:text-slate-400">
+                                    Escolha entre visual claro limpo ou modo escuro noturno
+                                </p>
                             </div>
+                            <button
+                                type="button"
+                                onClick={onToggleDarkMode}
+                                className="btn btn-secondary btn-sm"
+                            >
+                                {darkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+                                {darkMode ? 'Usar Modo Claro' : 'Usar Modo Escuro'}
+                            </button>
                         </div>
 
-                        <div className="grid grid-cols-2 gap-3" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
-                            <div>
-                                <label className="text-xs font-semibold text-gray-500">Nova Senha</label>
+                        <form onSubmit={handleSaveLocalPassword} className="card p-5 space-y-3.5">
+                            <div className="flex items-center gap-2">
+                                <Lock className="w-4 h-4 text-rose-600" />
+                                <h3 className="font-display text-base font-bold text-slate-900 dark:text-white">
+                                    Senha Local deste Dispositivo
+                                </h3>
+                            </div>
+                            <p className="text-xs text-slate-500">
+                                Usada apenas para desbloqueio local quando offline ou sem login na nuvem.
+                            </p>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                 <input
-                                    type={showPassword ? 'text' : 'password'}
+                                    type="password"
+                                    placeholder="Nova senha local"
                                     value={newPassword}
                                     onChange={(e) => setNewPassword(e.target.value)}
-                                    className="form-input w-full"
-                                    placeholder="Mín. 4 caracteres"
-                                    required
+                                    className="input"
                                 />
-                            </div>
-                            <div>
-                                <label className="text-xs font-semibold text-gray-500">Confirmar Nova</label>
                                 <input
-                                    type={showPassword ? 'text' : 'password'}
-                                    value={confirmNewPassword}
-                                    onChange={(e) => setConfirmNewPassword(e.target.value)}
-                                    className="form-input w-full"
-                                    placeholder="Repita a nova senha"
-                                    required
+                                    type="password"
+                                    placeholder="Confirmar senha"
+                                    value={confirmPassword}
+                                    onChange={(e) => setConfirmPassword(e.target.value)}
+                                    className="input"
                                 />
                             </div>
-                        </div>
-
-                        {passwordMessage && (
-                            <div className={`p-2.5 rounded-lg text-xs font-medium border ${passwordMessage.type === 'success' ? 'bg-green-50 text-green-800 border-green-200' : 'bg-red-50 text-red-800 border-red-200'}`}>
-                                {passwordMessage.text}
-                            </div>
-                        )}
-
-                        <button type="submit" className="btn btn-primary w-full justify-center">
-                            <Lock size={16} /> Atualizar Senha
-                        </button>
-                    </form>
-                </div>
-
-                {/* Backup Section */}
-                <div className="card">
-                    <div className="card-header">
-                        <h3 className="flex items-center gap-2 font-bold">
-                            <Download size={20} /> Backup e Restauração
-                        </h3>
-                    </div>
-                    <div className="card-body space-y-4">
-                        <p className="text-sm text-gray-600 dark:text-gray-300">
-                            Faça backups regulares. O arquivo contém todos os alunos, pagamentos, histórico e logo da academia.
-                        </p>
-                        <div className="p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg text-yellow-800 dark:text-yellow-300 text-xs">
-                            <strong>⚠️ Segurança:</strong> Guarde o arquivo em local seguro (pen drive ou nuvem).
-                        </div>
-
-                        <div className="flex flex-col gap-3">
-                            <button onClick={handleExport} className="btn btn-primary justify-center">
-                                <Download size={18} /> Exportar Backup (Salvar Dados)
-                            </button>
-
-                            <div className="relative">
-                                <input
-                                    type="file"
-                                    ref={fileInputRef}
-                                    accept=".json"
-                                    onChange={handleImport}
-                                    className="hidden"
-                                />
-                                <button
-                                    onClick={() => fileInputRef.current?.click()}
-                                    className="btn btn-outline justify-center w-full"
-                                >
-                                    <Upload size={18} /> Importar Backup
+                            <div className="flex justify-end">
+                                <button type="submit" className="btn btn-primary btn-sm">
+                                    Atualizar Senha Local
                                 </button>
                             </div>
-                        </div>
+                        </form>
                     </div>
                 </div>
+            )}
 
-                {/* Privacy Info */}
-                <div className="card">
-                    <div className="card-header">
-                        <h3 className="flex items-center gap-2 font-bold">
-                            <ShieldCheck size={20} /> Privacidade e Armazenamento
-                        </h3>
-                    </div>
-                    <div className="card-body space-y-4">
-                        <div className="p-4 bg-blue-50 text-blue-800 rounded-lg text-sm border border-blue-100">
-                            <h4 className="font-bold flex items-center gap-2 mb-2">
-                                <Info size={16} /> Onde estão meus dados?
-                            </h4>
-                            <p className="leading-relaxed">
-                                Seus dados estão salvos <strong>SOMENTE no navegador deste computador (IndexedDB)</strong>. Nenhum dado de aluno ou financeiro é enviado para servidores externos.
-                            </p>
-                        </div>
-                    </div>
-                </div>
-
-                {/* Plan Managers */}
-                <div className="md:col-span-2 grid md:grid-cols-2 gap-6">
+            {/* ABA 2: PLANOS */}
+            {activeTab === 'plans' && (
+                <div className="space-y-6">
                     <PlanManager />
                     <PersonalPlanManager />
                 </div>
+            )}
 
-                {/* Danger Zone */}
-                <div className="card border-red-200 md:col-span-2">
-                    <div className="card-header bg-red-50 border-red-100">
-                        <h3 className="flex items-center gap-2 font-bold text-red-700">
-                            <Trash2 size={20} /> Zona de Perigo
-                        </h3>
+            {/* ABA 3: NUVEM & CELULAR */}
+            {activeTab === 'cloud' && (
+                <div className="space-y-5">
+                    <div className="card p-5 space-y-4">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div>
+                                <h3 className="font-display text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                                    <Cloud className="w-5 h-5 text-rose-600" />
+                                    Sincronização PC ↔ Celular (Supabase)
+                                </h3>
+                                <p className="text-xs text-slate-500 dark:text-slate-400">
+                                    Permite acessar e lançar dados em tempo real no computador e celular, com cache offline automático.
+                                </p>
+                            </div>
+
+                            <span
+                                className={`badge ${
+                                    sync.state === 'synced'
+                                        ? 'badge-success'
+                                        : sync.state === 'syncing'
+                                            ? 'badge-info'
+                                            : sync.state === 'error'
+                                                ? 'badge-danger'
+                                                : 'badge-warning'
+                                }`}
+                            >
+                                {sync.state === 'synced' && 'Sincronizado'}
+                                {sync.state === 'syncing' && 'Sincronizando...'}
+                                {sync.state === 'unauthenticated' && 'Aguardando Login'}
+                                {sync.state === 'local-only' && 'Modo Somente Local'}
+                                {sync.state === 'offline' && 'Sem Internet'}
+                                {sync.state === 'error' && 'Erro de Conexão'}
+                            </span>
+                        </div>
+
+                        {sync.lastError && (
+                            <div className="p-3 rounded-xl bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800 text-xs text-red-700 dark:text-red-300 flex items-center gap-2">
+                                <AlertTriangle className="w-4 h-4 shrink-0" />
+                                <span>{sync.lastError}</span>
+                            </div>
+                        )}
+
+                        {envConfigured ? (
+                            <div className="p-3.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/60 text-xs text-emerald-800 dark:text-emerald-200 flex items-center gap-2">
+                                <CheckCircle2 className="w-4 h-4 shrink-0" />
+                                <span>
+                                    Projeto Supabase conectado automaticamente pelas variáveis de ambiente da Vercel/servidor.
+                                </span>
+                            </div>
+                        ) : (
+                            <form onSubmit={handleSaveCloudConfig} className="space-y-3 p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800">
+                                <div className="text-xs font-bold uppercase text-slate-600 dark:text-slate-300">
+                                    Credenciais do Projeto Supabase
+                                </div>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                    <div>
+                                        <label className="label">Project URL</label>
+                                        <input
+                                            type="url"
+                                            placeholder="https://seuprojeto.supabase.co"
+                                            value={supaUrl}
+                                            onChange={(e) => setSupaUrl(e.target.value)}
+                                            className="input text-xs"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="label">Anon Public Key</label>
+                                        <input
+                                            type="text"
+                                            placeholder="eyJhbGciOiJIUzI1NiIs..."
+                                            value={supaKey}
+                                            onChange={(e) => setSupaKey(e.target.value)}
+                                            className="input text-xs font-mono"
+                                        />
+                                    </div>
+                                </div>
+                                <div className="flex flex-wrap justify-between gap-2">
+                                    {cloudConfigured && (
+                                        <button
+                                            type="button"
+                                            onClick={handleClearCloudConfig}
+                                            className="btn btn-ghost btn-sm text-red-600"
+                                        >
+                                            Remover Configuração Local
+                                        </button>
+                                    )}
+                                    <button type="submit" className="btn btn-primary btn-sm ml-auto">
+                                        Salvar Credenciais Supabase
+                                    </button>
+                                </div>
+                            </form>
+                        )}
+
+                        {cloudConfigured && (
+                            sync.userEmail ? (
+                                <div className="p-4 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-3">
+                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                        <div>
+                                            <div className="text-xs font-bold uppercase text-slate-400">
+                                                Conta Conectada
+                                            </div>
+                                            <div className="font-bold text-slate-900 dark:text-white">
+                                                {sync.userEmail}
+                                            </div>
+                                            {sync.lastSyncedAt && (
+                                                <div className="text-xs text-slate-500">
+                                                    Última sincronização:{' '}
+                                                    {new Date(sync.lastSyncedAt).toLocaleString('pt-BR')}
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        <div className="flex flex-wrap gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => syncAll()}
+                                                className="btn btn-success btn-sm"
+                                            >
+                                                <RefreshCw
+                                                    className={`w-4 h-4 ${
+                                                        sync.state === 'syncing' ? 'animate-spin' : ''
+                                                    }`}
+                                                />
+                                                Sincronizar Agora
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => setConfirmForcePush(true)}
+                                                className="btn btn-secondary btn-sm"
+                                            >
+                                                <Upload className="w-4 h-4" />
+                                                Enviar Dados Locais → Nuvem
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => signOutCloud()}
+                                                className="btn btn-ghost btn-sm text-red-600"
+                                            >
+                                                <LogOut className="w-4 h-4" />
+                                                Desconectar
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="p-4 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-3">
+                                    <div className="text-sm font-bold text-slate-900 dark:text-white">
+                                        Entrar na Conta da Academia (Supabase Auth)
+                                    </div>
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                        <input
+                                            type="email"
+                                            placeholder="E-mail"
+                                            value={authEmail}
+                                            onChange={(e) => setAuthEmail(e.target.value)}
+                                            className="input"
+                                        />
+                                        <input
+                                            type="password"
+                                            placeholder="Senha (mín. 6 caracteres)"
+                                            value={authPass}
+                                            onChange={(e) => setAuthPass(e.target.value)}
+                                            className="input"
+                                        />
+                                    </div>
+                                    <div className="flex flex-wrap gap-2 justify-end">
+                                        <button
+                                            type="button"
+                                            disabled={authLoading}
+                                            onClick={() => handleCloudLogin(true)}
+                                            className="btn btn-secondary btn-sm"
+                                        >
+                                            Criar Conta
+                                        </button>
+                                        <button
+                                            type="button"
+                                            disabled={authLoading}
+                                            onClick={() => handleCloudLogin(false)}
+                                            className="btn btn-primary btn-sm"
+                                        >
+                                            Conectar &amp; Sincronizar
+                                        </button>
+                                    </div>
+                                </div>
+                            )
+                        )}
                     </div>
-                    <div className="card-body">
-                        <button onClick={handleReset} className="btn btn-danger w-full justify-center">
-                            Resetar Banco de Dados (Apagar Tudo)
+                </div>
+            )}
+
+            {/* ABA 4: BACKUP & HIGIENIZAÇÃO */}
+            {activeTab === 'backup' && (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="card p-5 flex flex-col justify-between gap-4">
+                        <div className="space-y-1.5">
+                            <div className="w-10 h-10 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 text-emerald-600 flex items-center justify-center">
+                                <Download className="w-5 h-5" />
+                            </div>
+                            <h3 className="font-display font-bold text-slate-900 dark:text-white">
+                                Exportar Backup Completo
+                            </h3>
+                            <p className="text-xs text-slate-500">
+                                Baixa um arquivo JSON com todos os alunos, pagamentos, despesas, planos e configurações.
+                            </p>
+                        </div>
+                        <button type="button" onClick={handleExportJson} className="btn btn-success w-full">
+                            <Download className="w-4 h-4" />
+                            Baixar Backup (.json)
+                        </button>
+                    </div>
+
+                    <div className="card p-5 flex flex-col justify-between gap-4 border-rose-200 dark:border-rose-900/50">
+                        <div className="space-y-1.5">
+                            <div className="w-10 h-10 rounded-xl bg-rose-50 dark:bg-rose-950/50 text-rose-600 flex items-center justify-center">
+                                <Sparkles className="w-5 h-5" />
+                            </div>
+                            <h3 className="font-display font-bold text-slate-900 dark:text-white">
+                                Importar &amp; Higienizar Backup
+                            </h3>
+                            <p className="text-xs text-slate-500">
+                                Restaura seu arquivo JSON corrigindo vencimentos +1 dia, alunos duplicados e histórico mensal.
+                            </p>
+                        </div>
+                        <label className="btn btn-primary w-full cursor-pointer">
+                            <Upload className="w-4 h-4" />
+                            Selecionar Arquivo JSON
+                            <input
+                                type="file"
+                                accept=".json,application/json"
+                                onChange={handleChooseImportFile}
+                                className="hidden"
+                            />
+                        </label>
+                    </div>
+
+                    <div className="card p-5 flex flex-col justify-between gap-4">
+                        <div className="space-y-1.5">
+                            <div className="w-10 h-10 rounded-xl bg-sky-50 dark:bg-sky-950/50 text-sky-600 flex items-center justify-center">
+                                <RefreshCw className="w-5 h-5" />
+                            </div>
+                            <h3 className="font-display font-bold text-slate-900 dark:text-white">
+                                Recalcular Histórico
+                            </h3>
+                            <p className="text-xs text-slate-500">
+                                Reconstrói os fechamentos de meses passados usando os lançamentos reais de receita e despesa.
+                            </p>
+                        </div>
+                        <button
+                            type="button"
+                            disabled={isRepairing}
+                            onClick={handleRepairSnapshots}
+                            className="btn btn-secondary w-full"
+                        >
+                            <RefreshCw className={`w-4 h-4 ${isRepairing ? 'animate-spin' : ''}`} />
+                            {isRepairing ? 'Recalculando...' : 'Recalcular Meses Passados'}
                         </button>
                     </div>
                 </div>
-            </div>
+            )}
+
+            <BackupImportModal
+                isOpen={importModalOpen}
+                onClose={() => {
+                    setImportModalOpen(false);
+                    setPendingBackupData(null);
+                }}
+                rawData={pendingBackupData}
+                filename={pendingBackupName}
+            />
+
+            <ConfirmModal
+                isOpen={confirmForcePush}
+                title="Enviar Dados Locais para Nuvem"
+                message="Deseja enviar todos os dados deste computador/aparelho para o Supabase agora?\n\nUse isso após importar um backup limpo ou na primeira migração para a nuvem."
+                confirmText="Enviar Agora"
+                variant="info"
+                onConfirm={handleForceUploadCloud}
+                onCancel={() => setConfirmForcePush(false)}
+            />
         </div>
     );
 }

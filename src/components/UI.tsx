@@ -1,10 +1,18 @@
 import React from 'react';
-import { X, AlertTriangle, Check, Loader2, Info } from 'lucide-react';
+import {
+    CheckCircle,
+    AlertCircle,
+    Info,
+    AlertTriangle,
+    X,
+    Loader2,
+} from 'lucide-react';
 
-// Toast Component
+export type ToastType = 'success' | 'error' | 'info' | 'warning';
+
 export interface ToastMessage {
     id: string;
-    type: 'success' | 'error' | 'info';
+    type: ToastType;
     message: string;
 }
 
@@ -13,91 +21,160 @@ interface ToastContainerProps {
     removeToast: (id: string) => void;
 }
 
-export const ToastContainer: React.FC<ToastContainerProps> = ({ toasts, removeToast }) => {
-    return (
-        <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2">
-            {toasts.map((toast) => (
-                <div
-                    key={toast.id}
-                    className={`flex items-center gap-2 px-4 py-3 rounded-lg shadow-lg text-white transition-all transform animate-slide-in ${toast.type === 'success' ? 'bg-green-600' :
-                            toast.type === 'error' ? 'bg-red-600' : 'bg-blue-600'
-                        }`}
-                >
-                    {toast.type === 'success' && <Check size={18} />}
-                    {toast.type === 'error' && <AlertTriangle size={18} />}
-                    {toast.type === 'info' && <Info size={18} />}
-                    <span className="text-sm font-medium">{toast.message}</span>
-                    <button onClick={() => removeToast(toast.id)} className="ml-2 hover:bg-white/20 rounded-full p-1">
-                        <X size={14} />
-                    </button>
-                </div>
-            ))}
-        </div>
-    );
+const TOAST_STYLES: Record<ToastType, { box: string; icon: React.ReactNode }> = {
+    success: {
+        box: 'bg-emerald-600 text-white border-emerald-500',
+        icon: <CheckCircle className="w-5 h-5 shrink-0" />,
+    },
+    error: {
+        box: 'bg-red-600 text-white border-red-500',
+        icon: <AlertCircle className="w-5 h-5 shrink-0" />,
+    },
+    warning: {
+        box: 'bg-amber-500 text-white border-amber-400',
+        icon: <AlertTriangle className="w-5 h-5 shrink-0" />,
+    },
+    info: {
+        box: 'bg-slate-800 text-white border-slate-700 dark:bg-slate-700',
+        icon: <Info className="w-5 h-5 shrink-0" />,
+    },
 };
 
-// Confirmation Modal
+export function ToastContainer({ toasts, removeToast }: ToastContainerProps) {
+    if (toasts.length === 0) return null;
+
+    return (
+        <div className="fixed bottom-20 md:bottom-5 right-4 z-[90] flex flex-col gap-2 max-w-sm w-[calc(100vw-2rem)] pointer-events-none">
+            {toasts.map((t) => {
+                const style = TOAST_STYLES[t.type];
+                return (
+                    <div
+                        key={t.id}
+                        className={`pointer-events-auto flex items-center gap-3 px-4 py-3 rounded-xl border shadow-lg text-sm font-medium animate-fade-in ${style.box}`}
+                    >
+                        {style.icon}
+                        <span className="flex-1 leading-snug">{t.message}</span>
+                        <button
+                            type="button"
+                            onClick={() => removeToast(t.id)}
+                            className="p-1 rounded-lg hover:bg-white/20 transition-colors"
+                            aria-label="Fechar aviso"
+                        >
+                            <X className="w-4 h-4" />
+                        </button>
+                    </div>
+                );
+            })}
+        </div>
+    );
+}
+
 interface ConfirmModalProps {
     isOpen: boolean;
     title: string;
     message: string;
     onConfirm: () => void;
     onCancel: () => void;
-    type?: 'danger' | 'info';
+    confirmText?: string;
+    cancelText?: string;
+    variant?: 'danger' | 'warning' | 'info';
 }
 
-export const ConfirmModal: React.FC<ConfirmModalProps> = ({ isOpen, title, message, onConfirm, onCancel, type = 'danger' }) => {
+export function ConfirmModal({
+    isOpen,
+    title,
+    message,
+    onConfirm,
+    onCancel,
+    confirmText = 'Confirmar',
+    cancelText = 'Cancelar',
+    variant = 'danger',
+}: ConfirmModalProps) {
     if (!isOpen) return null;
 
+    const btnClass =
+        variant === 'danger'
+            ? 'btn-danger'
+            : variant === 'warning'
+                ? 'bg-amber-500 hover:bg-amber-600 text-white'
+                : 'btn-primary';
+
+    const iconBox =
+        variant === 'danger'
+            ? 'bg-red-100 text-red-600 dark:bg-red-950/60 dark:text-red-400'
+            : variant === 'warning'
+                ? 'bg-amber-100 text-amber-600 dark:bg-amber-950/60 dark:text-amber-400'
+                : 'bg-rose-100 text-rose-600 dark:bg-rose-950/60 dark:text-rose-400';
+
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
-            <div className="bg-slate-800 border border-slate-700 rounded-xl p-6 max-w-md w-full shadow-2xl transform transition-all scale-100">
-                <div className="flex items-center gap-3 mb-4">
-                    <div className={`p-3 rounded-full ${type === 'danger' ? 'bg-red-500/20 text-red-400' : 'bg-blue-500/20 text-blue-400'}`}>
-                        <AlertTriangle size={24} />
+        <div className="modal-overlay z-[80]" onClick={onCancel}>
+            <div
+                className="modal-box max-w-md sm:rounded-2xl m-4 sm:m-0 rounded-2xl"
+                onClick={(e) => e.stopPropagation()}
+            >
+                <div className="p-6 space-y-4">
+                    <div className="flex items-start gap-3.5">
+                        <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${iconBox}`}>
+                            <AlertTriangle className="w-5 h-5" />
+                        </div>
+                        <div className="space-y-1">
+                            <h3 className="text-lg font-bold text-slate-900 dark:text-white leading-tight">
+                                {title}
+                            </h3>
+                            <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed whitespace-pre-line">
+                                {message}
+                            </p>
+                        </div>
                     </div>
-                    <h3 className="text-xl font-bold text-white">{title}</h3>
-                </div>
 
-                <p className="text-slate-300 mb-6 leading-relaxed">
-                    {message}
-                </p>
-
-                <div className="flex justify-end gap-3">
-                    <button
-                        onClick={onCancel}
-                        className="px-4 py-2 text-slate-400 hover:text-white hover:bg-slate-700/50 rounded-lg transition-colors"
-                    >
-                        Cancelar
-                    </button>
-                    <button
-                        onClick={onConfirm}
-                        className={`px-4 py-2 text-white font-medium rounded-lg transition-colors ${type === 'danger'
-                                ? 'bg-red-600 hover:bg-red-700'
-                                : 'bg-blue-600 hover:bg-blue-700'
-                            }`}
-                    >
-                        Confirmar
-                    </button>
+                    <div className="flex items-center justify-end gap-2.5 pt-2">
+                        <button type="button" onClick={onCancel} className="btn btn-secondary">
+                            {cancelText}
+                        </button>
+                        <button type="button" onClick={onConfirm} className={`btn ${btnClass}`}>
+                            {confirmText}
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>
     );
-};
-
-// Loading Overlay
-interface LoadingOverlayProps {
-    isLoading: boolean;
-    message?: string;
 }
 
-export const LoadingOverlay: React.FC<LoadingOverlayProps> = ({ isLoading, message = 'Carregando...' }) => {
-    if (!isLoading) return null;
-
+export function LoadingOverlay({ message = 'Carregando...' }: { message?: string }) {
     return (
-        <div className="fixed inset-0 z-[60] flex flex-col items-center justify-center bg-black/70 backdrop-blur-sm">
-            <Loader2 size={48} className="text-blue-500 animate-spin mb-4" />
-            <p className="text-white text-lg font-medium animate-pulse">{message}</p>
+        <div className="fixed inset-0 z-[100] bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="card px-6 py-5 flex items-center gap-3.5 shadow-xl">
+                <Loader2 className="w-6 h-6 text-rose-600 animate-spin shrink-0" />
+                <span className="text-sm font-semibold text-slate-800 dark:text-slate-100">
+                    {message}
+                </span>
+            </div>
         </div>
     );
-};
+}
+
+export function EmptyState({
+    icon,
+    title,
+    description,
+    action,
+}: {
+    icon: React.ReactNode;
+    title: string;
+    description: string;
+    action?: React.ReactNode;
+}) {
+    return (
+        <div className="card p-10 text-center flex flex-col items-center justify-center space-y-3">
+            <div className="w-12 h-12 rounded-2xl bg-slate-100 dark:bg-slate-800 text-slate-400 flex items-center justify-center">
+                {icon}
+            </div>
+            <div className="space-y-1 max-w-sm">
+                <h4 className="font-bold text-slate-900 dark:text-white text-base">{title}</h4>
+                <p className="text-sm text-slate-500 dark:text-slate-400">{description}</p>
+            </div>
+            {action && <div className="pt-2">{action}</div>}
+        </div>
+    );
+}

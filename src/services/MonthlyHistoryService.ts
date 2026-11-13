@@ -1,235 +1,192 @@
 /**
  * MonthlyHistoryService
- * 
- * Serviço responsável por:
- * - Detectar automaticamente virada de mês
- * - Gerar snapshot (fechamento) do mês anterior
- * - Consultar histórico de meses
- * 
- * Os snapshots são IMUTÁVEIS após criados.
+ *
+ * Responsável pelo fechamento e histórico mensal:
+ * - Detecta virada de mês com segurança
+ * - Usa getYearMonth() (sem bug de UTC) e inclui multas/juros (lateFee)
+ * - Nunca gera snapshots para o mês atual ou meses futuros
+ * - Corrige/recalcula snapshots antigos corrompidos ou alterados após o fechamento
  */
 
 import { db } from './db';
 import { MonthlySnapshot } from '../types';
-import { getYearMonth, getCurrentMonthString } from '../utils/dateUtils';
+import { getCurrentMonthString, getYearMonth } from '../utils/dateUtils';
 
-/**
- * Gera o ID do mês no formato "YYYY-MM"
- */
 export function getMonthId(year: number, month: number): string {
     return `${year}-${String(month + 1).padStart(2, '0')}`;
 }
 
-/**
- * Verifica se precisa fechar o mês anterior
- * Deve ser chamada ao carregar o Dashboard
- * 
- * @returns true se fechou um mês, false caso contrário
- */
-export async function checkAndCloseMonth(): Promise<boolean> {
-    const today = new Date();
-    const currentYear = today.getFullYear();
-    const currentMonth = today.getMonth(); // 0-11
-
-    // Calcular mês anterior
-    let previousMonth = currentMonth - 1;
-    let previousYear = currentYear;
-    if (previousMonth < 0) {
-        previousMonth = 11; // Dezembro
-        previousYear = currentYear - 1;
-    }
-
-    const previousMonthId = getMonthId(previousYear, previousMonth);
-
-    // Verificar se já existe snapshot do mês anterior
-    const existingSnapshot = await db.monthlySnapshots.get(previousMonthId);
-    if (existingSnapshot) {
-        // Já está fechado, não fazer nada
-        return false;
-    }
-
-    // Verificar a última vez que o sistema foi acessado
-    // Se nunca acessou antes, não precisa fechar nada
-    const lastAccess = await db.settings.get('lastAccessDate');
-    if (!lastAccess) {
-        // Primeiro acesso, apenas registrar data e sair
-        await db.settings.put({ key: 'lastAccessDate', value: today.toISOString() });
-        return false;
-    }
-
-    const lastAccessDate = new Date(lastAccess.value);
-    const lastAccessMonth = lastAccessDate.getMonth();
-    const lastAccessYear = lastAccessDate.getFullYear();
-
-    // Se o último acesso foi no mesmo mês/ano atual, não precisa fechar
-    if (lastAccessMonth === currentMonth && lastAccessYear === currentYear) {
-        await db.settings.put({ key: 'lastAccessDate', value: today.toISOString() });
-        return false;
-    }
-
-    // Virou o mês! Precisamos fechar o(s) mês(es) anterior(es)
-    // Vamos fechar apenas o mês imediatamente anterior (simplificação)
-    console.log(`Detectada virada de mês. Fechando ${previousMonthId}...`);
-
-    await generateMonthSnapshot(previousYear, previousMonth);
-    await db.settings.put({ key: 'lastAccessDate', value: today.toISOString() });
-
-    return true;
-}
-
-/**
- * Gera e salva o snapshot de um mês específico
- */
-export async function generateMonthSnapshot(year: number, month: number): Promise<MonthlySnapshot> {
-    const monthId = getMonthId(year, month);
-
-    // Buscar todos os pagamentos do mês usando correspondência segura de YYYY-MM
-    const payments = await db.payments.toArray();
-    const monthPayments = payments.filter(p => p.date && getYearMonth(p.date) === monthId);
-    const revenue = monthPayments.reduce((sum, p) => sum + p.amount, 0);
-
-    // Buscar todas as despesas do mês
-    const expenses = await db.expenses.toArray();
-    const monthExpenses = expenses.filter(e => e.date && getYearMonth(e.date) === monthId);
-    const expenseTotal = monthExpenses.reduce((sum, e) => sum + e.amount, 0);
-
-    // Calcular alunos ativos e inadimplentes no último dia do mês
-    const students = await db.students.toArray();
-    const activeStudents = students.filter(s => s.status === 'ativo');
-
-    // Para inadimplentes, verificamos quem estava com nextDue antes do fim do mês
-    // Último dia do mês às 23:59:59 para incluir vencimentos no último dia
-    const endOfMonth = new Date(year, month + 1, 0, 23, 59, 59, 999);
-    const overdueCount = activeStudents.filter(s => {
-        // Normaliza a data de vencimento para meia-noite para comparação consistente
-        const dueDate = new Date(s.nextDue + 'T00:00:00');
-        return dueDate < endOfMonth;
-    }).length;
-
-    // Contar presenças do mês
-    const attendance = await db.attendance.toArray();
-    const monthAttendance = attendance.filter(a => a.date && getYearMonth(a.date) === monthId);
-
-    const snapshot: MonthlySnapshot = {
-        id: monthId,
-        year,
-        month,
-        revenue,
-        expenses: expenseTotal,
-        profit: revenue - expenseTotal,
-        activeStudents: activeStudents.length,
-        overdueCount,
-        attendanceCount: monthAttendance.length,
-        closedAt: new Date().toISOString()
-    };
-
-    // Salvar snapshot (imutável)
-    await db.monthlySnapshots.add(snapshot);
-    console.log(`Snapshot do mês ${monthId} criado com sucesso!`, snapshot);
-
-    return snapshot;
-}
-
-/**
- * Retorna todos os snapshots de histórico ordenados por data (mais recente primeiro)
- */
-export async function getMonthHistory(): Promise<MonthlySnapshot[]> {
-    const snapshots = await db.monthlySnapshots.toArray();
-    // Ordenar por ano e mês decrescente
-    return snapshots.sort((a, b) => {
-        if (a.year !== b.year) return b.year - a.year;
-        return b.month - a.month;
-    });
-}
-
-/**
- * Retorna o snapshot de um mês específico (se existir)
- */
-export async function getMonthSnapshot(year: number, month: number): Promise<MonthlySnapshot | undefined> {
-    const monthId = getMonthId(year, month);
-    return db.monthlySnapshots.get(monthId);
-}
-
-/**
- * Retorna o nome do mês em português
- */
 export function getMonthName(month: number): string {
     const months = [
         'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
-        'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'
+        'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro',
     ];
     return months[month] || '';
 }
 
 /**
- * Gera snapshots retroativos para meses que têm dados mas não têm snapshot
- * Esta função detecta todos os meses com pagamentos ou despesas e cria snapshots
- * para os que ainda não existem (exceto o mês atual)
- * 
- * @returns número de snapshots gerados
+ * Calcula receita, despesas, lucro e presenças reais de um mês passado (year, month 0-11).
+ * Preserva activeStudents / overdueCount caso já exista snapshot válido para evitar distorção retroativa.
  */
-export async function generateMissingSnapshots(): Promise<number> {
-    // Buscar todos os pagamentos e despesas para identificar meses com dados
-    const payments = await db.payments.toArray();
-    const expenses = await db.expenses.toArray();
+export async function computeMonthSnapshot(
+    year: number,
+    month: number,
+    existingSnapshot?: MonthlySnapshot | null
+): Promise<MonthlySnapshot> {
+    const monthId = getMonthId(year, month);
 
-    // Criar um Set com todos os meses que têm dados (formato "YYYY-MM")
-    const monthsWithData = new Set<string>();
+    const payments = await db.payments.filter((p) => !p.deletedAt).toArray();
+    const monthPayments = payments.filter((p) => getYearMonth(p.date) === monthId);
+    const revenue = monthPayments.reduce((sum, p) => sum + (p.amount || 0) + (p.lateFee || 0), 0);
 
-    payments.forEach(p => {
-        if (p.date) {
-            const ym = getYearMonth(p.date);
-            if (ym) monthsWithData.add(ym);
+    const expenses = await db.expenses.filter((e) => !e.deletedAt).toArray();
+    const monthExpenses = expenses.filter((e) => getYearMonth(e.date) === monthId);
+    const expenseTotal = monthExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
+
+    const attendance = await db.attendance.filter((a) => !a.deletedAt).toArray();
+    const monthAttendance = attendance.filter((a) => getYearMonth(a.date) === monthId);
+
+    // Só calcula activeStudents do zero se não houver snapshot prévio válido com histórico salvo
+    const hasHistoricalActiveCount = Boolean(existingSnapshot && existingSnapshot.activeStudents > 0);
+    let activeStudentsCount = hasHistoricalActiveCount ? existingSnapshot!.activeStudents : 0;
+    let overdueCount = existingSnapshot?.overdueCount ?? 0;
+
+    const endOfMonthIso = new Date(year, month + 1, 0, 23, 59, 59, 999).toISOString();
+    const wasPrematureSnapshot = Boolean(
+        existingSnapshot?.closedAt && existingSnapshot.closedAt < endOfMonthIso
+    );
+
+    if (!existingSnapshot || wasPrematureSnapshot) {
+        const students = await db.students.filter((s) => !s.deletedAt).toArray();
+        const activeStudents = students.filter((s) => s.status === 'ativo');
+        if (!hasHistoricalActiveCount) {
+            activeStudentsCount = activeStudents.length;
         }
-    });
 
-    expenses.forEach(e => {
-        if (e.date) {
-            const ym = getYearMonth(e.date);
-            if (ym) monthsWithData.add(ym);
-        }
-    });
+        const endOfMonthStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(
+            new Date(year, month + 1, 0).getDate()
+        ).padStart(2, '0')}`;
 
-    // Se por acaso existir snapshot do mês atual (ex: gerado indevidamente por bug de fuso), remover para manter dados dinâmicos
-    const currentMonthId = getCurrentMonthString();
-    monthsWithData.delete(currentMonthId);
-    const prematureSnapshot = await db.monthlySnapshots.get(currentMonthId);
-    if (prematureSnapshot) {
-        console.warn(`Removendo snapshot indevido do mês atual em andamento (${currentMonthId})...`);
-        await db.monthlySnapshots.delete(currentMonthId);
+        // Aproxima quem estava em atraso no fim daquele mês verificando pagamentos feitos para aquele mês
+        overdueCount = activeStudents.filter((s) => {
+            if (!s.nextDue) return false;
+            return s.nextDue <= endOfMonthStr;
+        }).length;
     }
 
-    // Buscar snapshots existentes
-    const existingSnapshots = await db.monthlySnapshots.toArray();
-    const existingIds = new Set(existingSnapshots.map(s => s.id));
+    const nowIso = new Date().toISOString();
+    return {
+        id: monthId,
+        year,
+        month,
+        revenue: Number(revenue.toFixed(2)),
+        expenses: Number(expenseTotal.toFixed(2)),
+        profit: Number((revenue - expenseTotal).toFixed(2)),
+        activeStudents: activeStudentsCount,
+        overdueCount,
+        attendanceCount: monthAttendance.length,
+        closedAt:
+            existingSnapshot && !wasPrematureSnapshot
+                ? existingSnapshot.closedAt
+                : nowIso,
+        updatedAt: nowIso,
+        deletedAt: null,
+    };
+}
 
-    // Gerar snapshots para meses que têm dados mas não têm snapshot
-    let generatedCount = 0;
-    for (const monthId of monthsWithData) {
-        if (!existingIds.has(monthId)) {
-            // Parsear o monthId para obter ano e mês
-            const [yearStr, monthStr] = monthId.split('-');
-            const year = parseInt(yearStr, 10);
-            const month = parseInt(monthStr, 10) - 1; // Converter de 1-12 para 0-11
-
-            console.log(`Gerando snapshot retroativo para ${monthId}...`);
-            await generateMonthSnapshot(year, month);
-            generatedCount++;
-        }
-    }
-
-    if (generatedCount > 0) {
-        console.log(`${generatedCount} snapshot(s) retroativo(s) gerado(s)!`);
-    }
-
-    return generatedCount;
+export async function generateMonthSnapshot(year: number, month: number): Promise<MonthlySnapshot> {
+    const monthId = getMonthId(year, month);
+    const existing = await db.monthlySnapshots.get(monthId);
+    const snapshot = await computeMonthSnapshot(year, month, existing);
+    await db.monthlySnapshots.put(snapshot);
+    return snapshot;
 }
 
 /**
- * Recalcula e atualiza o snapshot de um mês específico
+ * Sincroniza e repara snapshots de TODOS os meses passados (< mês atual):
+ * - Remove snapshots inválidos (mês atual ou futuro) que tenham sido criados por bug antigo
+ * - Gera snapshots faltantes de meses passados com transações
+ * - Atualiza snapshots passados cuja receita/despesa/presença divergem dos lançamentos reais
  */
-export async function recalculateMonthSnapshot(year: number, month: number): Promise<MonthlySnapshot> {
-    const monthId = getMonthId(year, month);
-    await db.monthlySnapshots.delete(monthId);
-    return generateMonthSnapshot(year, month);
+export async function syncAndRepairMonthlySnapshots(): Promise<{
+    updated: number;
+    removedFuture: number;
+}> {
+    const currentMonthId = getCurrentMonthString();
+    const payments = await db.payments.filter((p) => !p.deletedAt).toArray();
+    const expenses = await db.expenses.filter((e) => !e.deletedAt).toArray();
+    const existingSnapshots = await db.monthlySnapshots.filter((s) => !s.deletedAt).toArray();
+
+    let removedFuture = 0;
+    let updated = 0;
+
+    // 1. Remover snapshots do mês atual ou meses futuros (bug antigo de fechamento prematuro)
+    const nowIso = new Date().toISOString();
+    for (const snap of existingSnapshots) {
+        if (snap.id >= currentMonthId) {
+            await db.monthlySnapshots.update(snap.id, {
+                deletedAt: nowIso,
+                updatedAt: nowIso,
+            });
+            removedFuture++;
+        }
+    }
+
+    // 2. Descobrir todos os meses passados com dados ou já fechados
+    const pastMonthIds = new Set<string>();
+    payments.forEach((p) => {
+        const ym = getYearMonth(p.date);
+        if (ym && ym < currentMonthId) pastMonthIds.add(ym);
+    });
+    expenses.forEach((e) => {
+        const ym = getYearMonth(e.date);
+        if (ym && ym < currentMonthId) pastMonthIds.add(ym);
+    });
+    existingSnapshots.forEach((s) => {
+        if (s.id < currentMonthId) pastMonthIds.add(s.id);
+    });
+
+    const existingMap = new Map(existingSnapshots.map((s) => [s.id, s]));
+
+    for (const monthId of pastMonthIds) {
+        const [yStr, mStr] = monthId.split('-');
+        const year = parseInt(yStr, 10);
+        const month = parseInt(mStr, 10) - 1;
+        if (isNaN(year) || isNaN(month) || month < 0 || month > 11) continue;
+
+        const prev = existingMap.get(monthId);
+        const recomputed = await computeMonthSnapshot(year, month, prev);
+
+        const changed =
+            !prev ||
+            Math.abs(prev.revenue - recomputed.revenue) > 0.01 ||
+            Math.abs(prev.expenses - recomputed.expenses) > 0.01 ||
+            prev.attendanceCount !== recomputed.attendanceCount ||
+            prev.overdueCount !== recomputed.overdueCount;
+
+        if (changed) {
+            await db.monthlySnapshots.put(recomputed);
+            updated++;
+        }
+    }
+
+    return { updated, removedFuture };
+}
+
+export async function checkAndCloseMonth(): Promise<boolean> {
+    const today = new Date();
+    const { updated } = await syncAndRepairMonthlySnapshots();
+    await db.settings.put({ key: 'lastAccessDate', value: today.toISOString() });
+    return updated > 0;
+}
+
+export async function getMonthHistory(): Promise<MonthlySnapshot[]> {
+    const currentMonthId = getCurrentMonthString();
+    const snapshots = await db.monthlySnapshots
+        .filter((s) => !s.deletedAt && s.id < currentMonthId)
+        .toArray();
+    return snapshots.sort((a, b) => {
+        if (a.year !== b.year) return b.year - a.year;
+        return b.month - a.month;
+    });
 }

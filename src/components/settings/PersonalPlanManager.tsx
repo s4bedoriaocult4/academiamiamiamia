@@ -1,213 +1,198 @@
-import { useState } from 'react';
-import { useLiveQuery } from 'dexie-react-hooks';
-import { Plus, Trash2, Save, X, Edit } from 'lucide-react';
-import { db } from '../../services/db';
+import React, { useState } from 'react';
+import { Plus, Edit3, Trash2, Check, X } from 'lucide-react';
 import { PersonalPlan } from '../../types';
+import { usePersonalPlans } from '../../hooks/useGymStore';
+import { formatCurrencyBRL } from '../../utils/dateUtils';
+import { savePersonalPlan, softDeletePersonalPlan } from '../../services/dataAccess';
+import { ConfirmModal } from '../UI';
+import { useToast } from '../../contexts/ToastContext';
 
 export function PersonalPlanManager() {
-    const plans = useLiveQuery(() => db.personalPlans.toArray()) || [];
-    const [editingId, setEditingId] = useState<string | null>(null);
-    const [editForm, setEditForm] = useState<Partial<PersonalPlan>>({});
-    const [isAdding, setIsAdding] = useState(false);
-    const [newPlan, setNewPlan] = useState<Partial<PersonalPlan>>({
-        name: '', price: 0, totalClasses: 1, frequencyPerWeek: 1
-    });
+    const personalPlans = usePersonalPlans();
+    const { showToast } = useToast();
 
-    const handleEdit = (plan: PersonalPlan) => {
-        setEditingId(plan.id);
-        setEditForm(plan);
+    const [showForm, setShowForm] = useState(false);
+    const [editing, setEditing] = useState<PersonalPlan | null>(null);
+    const [name, setName] = useState('');
+    const [price, setPrice] = useState('');
+    const [totalClasses, setTotalClasses] = useState('4');
+    const [freqPerWeek, setFreqPerWeek] = useState('1');
+    const [planToDelete, setPlanToDelete] = useState<PersonalPlan | null>(null);
+
+    const openNew = () => {
+        setEditing(null);
+        setName('');
+        setPrice('');
+        setTotalClasses('4');
+        setFreqPerWeek('1');
+        setShowForm(true);
     };
 
-    const handleSave = async () => {
-        if (!editingId || !editForm) return;
-        try {
-            await db.personalPlans.update(editingId, editForm);
-            setEditingId(null);
-        } catch (error) {
-            console.error(error);
-            alert('Erro ao atualizar plano');
-        }
+    const openEdit = (p: PersonalPlan) => {
+        setEditing(p);
+        setName(p.name);
+        setPrice(String(p.price));
+        setTotalClasses(String(p.totalClasses));
+        setFreqPerWeek(String(p.frequencyPerWeek));
+        setShowForm(true);
     };
 
-    const handleAdd = async () => {
-        if (!newPlan.name || !newPlan.price || !newPlan.totalClasses) return;
-
-        try {
-            await db.personalPlans.add({
-                id: Date.now().toString(),
-                name: newPlan.name,
-                price: Number(newPlan.price),
-                totalClasses: Number(newPlan.totalClasses),
-                frequencyPerWeek: Number(newPlan.frequencyPerWeek)
-            } as PersonalPlan);
-            setIsAdding(false);
-            setNewPlan({ name: '', price: 0, totalClasses: 1, frequencyPerWeek: 1 });
-        } catch (error) {
-            console.error(error);
-            alert('Erro ao adicionar plano');
+    const handleSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        const numPrice = parseFloat(price.replace(',', '.'));
+        const classes = parseInt(totalClasses, 10);
+        if (!name.trim() || !Number.isFinite(numPrice) || numPrice <= 0 || !classes) {
+            showToast('warning', 'Preencha nome, valor e quantidade de aulas.');
+            return;
         }
+
+        await savePersonalPlan({
+            id: editing?.id,
+            name: name.trim(),
+            price: numPrice,
+            totalClasses: classes,
+            frequencyPerWeek: parseInt(freqPerWeek, 10) || 1,
+        });
+
+        showToast('success', editing ? 'Pacote atualizado!' : 'Pacote criado!');
+        setShowForm(false);
+        setEditing(null);
     };
 
-    const handleDelete = async (id: string) => {
-        if (confirm('Tem certeza que deseja excluir este plano?')) {
-            await db.personalPlans.delete(id);
-        }
+    const handleDelete = async () => {
+        if (!planToDelete) return;
+        await softDeletePersonalPlan(planToDelete.id);
+        showToast('success', 'Pacote Personal removido.');
+        setPlanToDelete(null);
     };
 
     return (
-        <div className="card mt-6">
-            <div className="card-header flex justify-between items-center">
-                <h3 className="font-bold">Planos Personal (Pacotes)</h3>
-                <button
-                    onClick={() => setIsAdding(!isAdding)}
-                    className="btn btn-sm btn-outline"
-                >
-                    <Plus size={16} /> Novo Pacote
-                </button>
-            </div>
+        <div className="card p-5 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                    <h3 className="font-display text-lg font-bold text-slate-900 dark:text-white">
+                        Pacotes de Aulas Personal
+                    </h3>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                        Pacotes vendidos por quantidade de créditos/aulas
+                    </p>
+                </div>
 
-            <div className="table-container">
-                <table className="table">
-                    <thead>
-                        <tr>
-                            <th>Nome</th>
-                            <th>Preço (R$)</th>
-                            <th>Aulas no Pacote</th>
-                            <th>Frequência</th>
-                            <th className="text-right">Ações</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {/* Add Row */}
-                        {isAdding && (
-                            <tr className="bg-blue-50">
-                                <td>
-                                    <input
-                                        className="form-input text-sm"
-                                        placeholder="Nome do Plano"
-                                        value={newPlan.name}
-                                        onChange={e => setNewPlan({ ...newPlan, name: e.target.value })}
-                                    />
-                                </td>
-                                <td>
-                                    <input
-                                        type="number"
-                                        className="form-input text-sm"
-                                        placeholder="Preço"
-                                        value={newPlan.price}
-                                        onChange={e => setNewPlan({ ...newPlan, price: Number(e.target.value) })}
-                                    />
-                                </td>
-                                <td>
-                                    <input
-                                        type="number"
-                                        className="form-input text-sm"
-                                        placeholder="Total Aulas"
-                                        value={newPlan.totalClasses}
-                                        onChange={e => setNewPlan({ ...newPlan, totalClasses: Number(e.target.value) })}
-                                    />
-                                </td>
-                                <td>
-                                    <select
-                                        className="form-select text-sm"
-                                        value={newPlan.frequencyPerWeek}
-                                        onChange={e => setNewPlan({ ...newPlan, frequencyPerWeek: Number(e.target.value) })}
-                                    >
-                                        <option value={1}>1x Semana</option>
-                                        <option value={2}>2x Semana</option>
-                                        <option value={3}>3x Semana</option>
-                                        <option value={99}>Livre</option>
-                                    </select>
-                                </td>
-                                <td className="text-right">
-                                    <div className="flex gap-2 justify-end">
-                                        <button onClick={handleAdd} className="action-btn success"><Save size={16} /></button>
-                                        <button onClick={() => setIsAdding(false)} className="action-btn danger"><X size={16} /></button>
-                                    </div>
-                                </td>
-                            </tr>
-                        )}
-
-                        {plans.map(plan => (
-                            <tr key={plan.id}>
-                                <td>
-                                    {editingId === plan.id ? (
-                                        <input
-                                            className="form-input text-sm"
-                                            value={editForm.name}
-                                            onChange={e => setEditForm({ ...editForm, name: e.target.value })}
-                                        />
-                                    ) : (
-                                        <span className="font-medium">{plan.name}</span>
-                                    )}
-                                </td>
-                                <td>
-                                    {editingId === plan.id ? (
-                                        <input
-                                            type="number"
-                                            className="form-input text-sm"
-                                            value={editForm.price}
-                                            onChange={e => setEditForm({ ...editForm, price: Number(e.target.value) })}
-                                        />
-                                    ) : (
-                                        <span className="font-bold text-gray-700">R$ {plan.price.toFixed(2)}</span>
-                                    )}
-                                </td>
-                                <td>
-                                    {editingId === plan.id ? (
-                                        <input
-                                            type="number"
-                                            className="form-input text-sm"
-                                            value={editForm.totalClasses}
-                                            onChange={e => setEditForm({ ...editForm, totalClasses: Number(e.target.value) })}
-                                        />
-                                    ) : (
-                                        <span className="badge badge-primary">{plan.totalClasses} aulas</span>
-                                    )}
-                                </td>
-                                <td>
-                                    {editingId === plan.id ? (
-                                        <select
-                                            className="form-select text-sm"
-                                            value={editForm.frequencyPerWeek}
-                                            onChange={e => setEditForm({ ...editForm, frequencyPerWeek: Number(e.target.value) })}
-                                        >
-                                            <option value={1}>1x Semana</option>
-                                            <option value={2}>2x Semana</option>
-                                            <option value={3}>3x Semana</option>
-                                            <option value={99}>Livre</option>
-                                        </select>
-                                    ) : (
-                                        <span className="text-sm text-gray-600">
-                                            {plan.frequencyPerWeek === 99 ? 'Livre' : `${plan.frequencyPerWeek}x / sem`}
-                                        </span>
-                                    )}
-                                </td>
-                                <td className="text-right">
-                                    <div className="action-buttons justify-end">
-                                        {editingId === plan.id ? (
-                                            <>
-                                                <button onClick={handleSave} className="action-btn success"><Save size={16} /></button>
-                                                <button onClick={() => setEditingId(null)} className="action-btn danger"><X size={16} /></button>
-                                            </>
-                                        ) : (
-                                            <>
-                                                <button onClick={() => handleEdit(plan)} className="action-btn primary"><Edit size={16} /></button>
-                                                <button onClick={() => handleDelete(plan.id)} className="action-btn danger"><Trash2 size={16} /></button>
-                                            </>
-                                        )}
-                                    </div>
-                                </td>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
-                {plans.length === 0 && !isAdding && (
-                    <div className="text-center p-8 text-gray-500">
-                        Nenhum pacote personal cadastrado.
-                    </div>
+                {!showForm && (
+                    <button type="button" onClick={openNew} className="btn btn-primary btn-sm">
+                        <Plus className="w-4 h-4" />
+                        Novo Pacote
+                    </button>
                 )}
             </div>
+
+            {showForm && (
+                <form
+                    onSubmit={handleSubmit}
+                    className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-3"
+                >
+                    <div className="flex items-center justify-between">
+                        <span className="text-sm font-bold text-slate-800 dark:text-white">
+                            {editing ? `Editar: ${editing.name}` : 'Novo Pacote Personal'}
+                        </span>
+                        <button type="button" onClick={() => setShowForm(false)} className="text-slate-400">
+                            <X className="w-4 h-4" />
+                        </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                        <div className="sm:col-span-2">
+                            <label className="label">Nome *</label>
+                            <input
+                                type="text"
+                                required
+                                placeholder="Ex: Pacote 8 aulas/mês"
+                                value={name}
+                                onChange={(e) => setName(e.target.value)}
+                                className="input"
+                            />
+                        </div>
+                        <div>
+                            <label className="label">Valor (R$) *</label>
+                            <input
+                                type="number"
+                                step="0.01"
+                                min="0"
+                                required
+                                value={price}
+                                onChange={(e) => setPrice(e.target.value)}
+                                className="input"
+                            />
+                        </div>
+                        <div>
+                            <label className="label">Qtd. Aulas *</label>
+                            <input
+                                type="number"
+                                min="1"
+                                required
+                                value={totalClasses}
+                                onChange={(e) => setTotalClasses(e.target.value)}
+                                className="input"
+                            />
+                        </div>
+                    </div>
+
+                    <div className="flex justify-end gap-2">
+                        <button
+                            type="button"
+                            onClick={() => setShowForm(false)}
+                            className="btn btn-secondary btn-sm"
+                        >
+                            Cancelar
+                        </button>
+                        <button type="submit" className="btn btn-success btn-sm">
+                            <Check className="w-4 h-4" />
+                            Salvar Pacote
+                        </button>
+                    </div>
+                </form>
+            )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                {personalPlans.map((p) => (
+                    <div
+                        key={p.id}
+                        className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-col justify-between gap-2"
+                    >
+                        <div>
+                            <div className="badge badge-violet">{p.totalClasses} aulas</div>
+                            <div className="font-bold text-sm text-slate-900 dark:text-white mt-2">
+                                {p.name}
+                            </div>
+                            <div className="font-display text-lg font-bold text-emerald-600 dark:text-emerald-400">
+                                {formatCurrencyBRL(p.price)}
+                            </div>
+                        </div>
+
+                        <div className="flex items-center justify-end gap-1 pt-2 border-t border-slate-100 dark:border-slate-800">
+                            <button type="button" onClick={() => openEdit(p)} className="btn btn-ghost btn-sm">
+                                <Edit3 className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setPlanToDelete(p)}
+                                className="btn btn-ghost btn-sm text-red-500"
+                            >
+                                <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                        </div>
+                    </div>
+                ))}
+            </div>
+
+            <ConfirmModal
+                isOpen={Boolean(planToDelete)}
+                title="Excluir Pacote Personal"
+                message={`Deseja excluir o pacote "${planToDelete?.name}"?`}
+                confirmText="Excluir"
+                onConfirm={handleDelete}
+                onCancel={() => setPlanToDelete(null)}
+            />
         </div>
     );
 }

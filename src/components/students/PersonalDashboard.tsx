@@ -1,163 +1,284 @@
-import { useState } from 'react';
-import { CheckCircle, PlusCircle, Search, Dumbbell } from 'lucide-react';
-import { db } from '../../services/db';
-import { useStudents } from '../../hooks/useGymStore';
-import { Attendance } from '../../types';
-import { PaymentModal } from '../payments/PaymentModal';
+import { useMemo, useState } from 'react';
+import {
+    Dumbbell,
+    CheckCircle2,
+    PlusCircle,
+    Undo2,
+    AlertCircle,
+    Calendar,
+} from 'lucide-react';
+import { useAttendance, usePersonalPlans, useStudents } from '../../hooks/useGymStore';
+import { Student } from '../../types';
+import {
+    formatCurrencyBRL,
+    formatDateBR,
+    getCurrentMonthString,
+    getTodayDateString,
+    getYearMonth,
+} from '../../utils/dateUtils';
+import { recordAttendance, softDeleteAttendance } from '../../services/dataAccess';
+import { useToast } from '../../contexts/ToastContext';
+import { EmptyState } from '../UI';
+import { WhatsAppButton } from '../common/WhatsAppButton';
 
-export function PersonalDashboard() {
+interface PersonalDashboardProps {
+    gymName: string;
+    onSellPackage: (student: Student) => void;
+}
+
+export function PersonalDashboard({ gymName, onSellPackage }: PersonalDashboardProps) {
     const students = useStudents();
+    const personalPlans = usePersonalPlans();
+    const attendance = useAttendance();
+    const { showToast } = useToast();
 
-    // Filtrar APENAS alunos com saldo de aulas > 0
-    // Quando acaba as aulas, o aluno sai do controle personal até comprar novo pacote
-    const activePersonalStudents = students.filter(s =>
-        s.status === 'ativo' &&
-        s.personalClassesRemaining !== undefined &&
-        s.personalClassesRemaining > 0
+    const [filter, setFilter] = useState<'with_credits' | 'renew' | 'all'>('with_credits');
+    const [busyId, setBusyId] = useState<string | null>(null);
+
+    const today = getTodayDateString();
+    const currentMonth = getCurrentMonthString();
+
+    const personalPlanMap = useMemo(
+        () => new Map(personalPlans.map((p) => [p.id, p])),
+        [personalPlans]
     );
 
-    const [searchTerm, setSearchTerm] = useState('');
-    const [paymentModalOpen, setPaymentModalOpen] = useState(false);
-    const [selectedStudentId, setSelectedStudentId] = useState<string | null>(null);
+    const personalStudents = useMemo(
+        () =>
+            students
+                .filter(
+                    (s) =>
+                        s.status === 'ativo' &&
+                        (s.planType === 'personal' ||
+                            s.planType === 'both' ||
+                            (s.personalClassesRemaining || 0) > 0)
+                )
+                .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR')),
+        [students]
+    );
 
-    // Filter & Sort (ordenar por saldo crescente - quem tem menos aparece primeiro)
-    const filteredStudents = activePersonalStudents
-        .filter(s => s.name.toLowerCase().includes(searchTerm.toLowerCase()))
-        .sort((a, b) => (a.personalClassesRemaining || 0) - (b.personalClassesRemaining || 0));
+    const visibleStudents = useMemo(() => {
+        if (filter === 'with_credits') {
+            return personalStudents.filter((s) => (s.personalClassesRemaining || 0) > 0);
+        }
+        if (filter === 'renew') {
+            return personalStudents.filter((s) => (s.personalClassesRemaining || 0) <= 1);
+        }
+        return personalStudents;
+    }, [personalStudents, filter]);
 
-    const handleQuickCheckIn = async (studentId: string) => {
-        const student = students.find(s => s.id === studentId);
-        if (!student) return;
+    const todayAttendanceMap = useMemo(() => {
+        const map = new Map<string, string>();
+        attendance
+            .filter((a) => a.date === today && a.attendanceType === 'personal')
+            .forEach((a) => map.set(a.studentId, a.id));
+        return map;
+    }, [attendance, today]);
 
-        const currentBalance = student.personalClassesRemaining || 0;
+    const monthClassesCount = useMemo(
+        () =>
+            attendance.filter(
+                (a) => a.attendanceType === 'personal' && getYearMonth(a.date) === currentMonth
+            ).length,
+        [attendance, currentMonth]
+    );
 
-        // BLOQUEAR se saldo <= 0
-        if (currentBalance <= 0) {
-            alert('Este aluno não possui aulas restantes. É necessário comprar um novo pacote.');
+    const handleRegisterClass = async (student: Student) => {
+        if ((student.personalClassesRemaining || 0) <= 0) {
+            showToast('warning', `${student.name} está sem saldo. Venda um novo pacote primeiro.`);
             return;
         }
-
-        if (!confirm(`Registrar aula Personal para ${student.name}?\n\nSaldo atual: ${currentBalance} aula(s)\nSaldo após: ${currentBalance - 1} aula(s)`)) {
-            return;
-        }
-
+        setBusyId(student.id);
         try {
-            await db.transaction('rw', db.attendance, db.students, async () => {
-                const newAttendance: Attendance = {
-                    id: Date.now().toString(),
-                    studentId,
-                    studentName: student.name,
-                    date: new Date().toISOString().split('T')[0],
-                    createdAt: new Date().toISOString(),
-                    attendanceType: 'personal'
-                };
-                await db.attendance.add(newAttendance);
-
-                // Garantir que nunca fica negativo
-                const newBalance = Math.max(0, currentBalance - 1);
-                await db.students.update(studentId, {
-                    personalClassesRemaining: newBalance
-                });
-            });
-            alert('Aula registrada com sucesso!');
-        } catch (error) {
-            console.error(error);
-            alert('Erro ao registrar aula');
+            await recordAttendance(student, today, 'personal');
+            showToast(
+                'success',
+                `Aula de Personal registrada para ${student.name}! Restam ${(student.personalClassesRemaining || 1) - 1} aula(s).`
+            );
+        } catch {
+            showToast('error', 'Erro ao registrar aula de Personal.');
+        } finally {
+            setBusyId(null);
         }
     };
 
-    const handleBuyPackage = (studentId: string) => {
-        setSelectedStudentId(studentId);
-        setPaymentModalOpen(true);
+    const handleUndoTodayClass = async (student: Student, attendanceId: string) => {
+        setBusyId(student.id);
+        try {
+            await softDeleteAttendance(attendanceId);
+            showToast('info', `Aula de hoje de ${student.name} desfeita (+1 crédito devolvido).`);
+        } catch {
+            showToast('error', 'Erro ao desfazer aula.');
+        } finally {
+            setBusyId(null);
+        }
     };
+
+    const withCreditsCount = personalStudents.filter((s) => (s.personalClassesRemaining || 0) > 0).length;
+    const lowCreditsCount = personalStudents.filter((s) => (s.personalClassesRemaining || 0) <= 1).length;
 
     return (
-        <div className="space-y-6 animate-fade-in">
-            <div className="flex justify-between items-center mb-6">
-                <div>
-                    <h2 className="text-2xl font-bold flex items-center gap-2">
-                        <Dumbbell className="text-blue-600" />
-                        Dashboard Personal
-                    </h2>
-                    <p className="text-gray-500">Controle de pacotes e aulas avulsas</p>
+        <div className="space-y-6">
+            <div>
+                <h1 className="font-display text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white tracking-tight">
+                    Aulas Personal
+                </h1>
+                <p className="text-sm text-slate-500 dark:text-slate-400">
+                    Controle de saldo de aulas individuais em 1 clique
+                </p>
+            </div>
+
+            {/* Resumo */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="card p-4">
+                    <div className="text-xs font-bold uppercase text-slate-500">Com Saldo Ativo</div>
+                    <div className="font-display text-2xl font-bold text-emerald-600 dark:text-emerald-400 mt-1">
+                        {withCreditsCount} aluno(s)
+                    </div>
                 </div>
-                <div className="form-input-icon max-w-[300px]">
-                    <Search className="icon" size={18} />
-                    <input
-                        className="form-input"
-                        placeholder="Buscar aluno..."
-                        value={searchTerm}
-                        onChange={e => setSearchTerm(e.target.value)}
-                    />
+                <div className="card p-4">
+                    <div className="text-xs font-bold uppercase text-slate-500">Acabando / Renovar</div>
+                    <div className="font-display text-2xl font-bold text-amber-600 dark:text-amber-400 mt-1">
+                        {lowCreditsCount} aluno(s)
+                    </div>
+                </div>
+                <div className="card p-4">
+                    <div className="text-xs font-bold uppercase text-slate-500">Aulas Dadas no Mês</div>
+                    <div className="font-display text-2xl font-bold text-slate-900 dark:text-white mt-1">
+                        {monthClassesCount}
+                    </div>
                 </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {filteredStudents.map(student => {
-                    const remaining = student.personalClassesRemaining || 0;
-                    const isLow = remaining <= 2;
-                    const isZero = remaining <= 0;
-
-                    return (
-                        <div key={student.id} className={`card p-5 border-l-4 ${isZero ? 'border-l-red-500' : isLow ? 'border-l-yellow-500' : 'border-l-green-500'}`}>
-                            <div className="flex justify-between items-start mb-4">
-                                <div>
-                                    <h3 className="font-bold text-lg">{student.name}</h3>
-                                    <p className="text-sm text-gray-500">Saldo de Aulas</p>
-                                </div>
-                                <div className={`px-3 py-1 rounded-full text-sm font-bold ${isZero ? 'bg-red-100 text-red-700' : isLow ? 'bg-yellow-100 text-yellow-700' : 'bg-green-100 text-green-700'}`}>
-                                    {remaining}
-                                </div>
-                            </div>
-
-                            <div className="w-full bg-gray-200 rounded-full h-2.5 mb-4">
-                                <div
-                                    className={`h-2.5 rounded-full ${isZero ? 'bg-red-500' : isLow ? 'bg-yellow-500' : 'bg-blue-600'}`}
-                                    style={{ width: `${Math.min(100, Math.max(0, (remaining / 10) * 100))}%` }}
-                                ></div>
-                            </div>
-
-                            <div className="grid grid-cols-2 gap-3 mt-auto">
-                                <button
-                                    onClick={() => handleQuickCheckIn(student.id)}
-                                    className="btn btn-primary btn-sm w-full flex justify-center items-center gap-2"
-                                >
-                                    <CheckCircle size={16} />
-                                    Check-in
-                                </button>
-                                <button
-                                    onClick={() => handleBuyPackage(student.id)}
-                                    className="btn btn-success btn-sm w-full flex justify-center items-center gap-2"
-                                >
-                                    <PlusCircle size={16} />
-                                    Comprar
-                                </button>
-                            </div>
-                        </div>
-                    );
-                })}
+            {/* Filtros */}
+            <div className="flex flex-wrap gap-2">
+                {[
+                    { id: 'with_credits', label: `Com Saldo (${withCreditsCount})` },
+                    { id: 'renew', label: `Saldo Baixo / Zerado (${lowCreditsCount})` },
+                    { id: 'all', label: `Todos Personal (${personalStudents.length})` },
+                ].map((tab) => (
+                    <button
+                        key={tab.id}
+                        type="button"
+                        onClick={() => setFilter(tab.id as typeof filter)}
+                        className={`px-3.5 py-2 rounded-xl text-xs font-bold border transition-all ${
+                            filter === tab.id
+                                ? 'bg-slate-900 text-white border-slate-900 dark:bg-white dark:text-slate-900'
+                                : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700'
+                        }`}
+                    >
+                        {tab.label}
+                    </button>
+                ))}
             </div>
 
-            {filteredStudents.length === 0 && (
-                <div className="text-center py-12 text-gray-500 bg-gray-50 rounded-lg border border-dashed border-gray-300">
-                    <Dumbbell size={48} className="mx-auto mb-3 opacity-20" />
-                    <p>Nenhum aluno com pacote personal ativo.</p>
-                    <p className="text-xs mt-2">Venda um pacote através do menu Pagamentos para começar.</p>
-                </div>
-            )}
-
-            {paymentModalOpen && (
-                <PaymentModal
-                    isOpen={paymentModalOpen}
-                    onClose={() => setPaymentModalOpen(false)}
-                    // Pass explicit initial data instead of "paymentToEdit" to correct the flow
-                    initialData={{
-                        studentId: selectedStudentId!,
-                        type: 'personal',
-                        method: 'PIX',
-                        date: new Date().toISOString().split('T')[0]
-                    }}
+            {visibleStudents.length === 0 ? (
+                <EmptyState
+                    icon={<Dumbbell className="w-6 h-6" />}
+                    title="Nenhum aluno nesta lista"
+                    description="Cadastre um aluno com modalidade 'Personal' ou 'Turma + Personal', ou mude o filtro acima."
                 />
+            ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                    {visibleStudents.map((s) => {
+                        const remaining = s.personalClassesRemaining || 0;
+                        const pPlan = s.personalPlanId ? personalPlanMap.get(s.personalPlanId) : undefined;
+                        const todayAttId = todayAttendanceMap.get(s.id);
+
+                        return (
+                            <div key={s.id} className="card p-5 flex flex-col justify-between gap-4">
+                                <div className="space-y-3">
+                                    <div className="flex items-start justify-between gap-2">
+                                        <div className="min-w-0">
+                                            <h3 className="font-bold text-slate-900 dark:text-white truncate">
+                                                {s.name}
+                                            </h3>
+                                            <div className="text-xs text-slate-500">
+                                                {pPlan
+                                                    ? `${pPlan.name} (${formatCurrencyBRL(pPlan.price)})`
+                                                    : 'Pacote Personal'}
+                                            </div>
+                                        </div>
+
+                                        <span
+                                            className={`badge ${
+                                                remaining === 0
+                                                    ? 'badge-danger'
+                                                    : remaining <= 2
+                                                        ? 'badge-warning'
+                                                        : 'badge-success'
+                                            }`}
+                                        >
+                                            {remaining} aula(s)
+                                        </span>
+                                    </div>
+
+                                    {s.personalStartDate && (
+                                        <div className="flex items-center gap-1.5 text-xs text-slate-500">
+                                            <Calendar className="w-3.5 h-3.5" />
+                                            Início Personal: {formatDateBR(s.personalStartDate)}
+                                        </div>
+                                    )}
+
+                                    {remaining <= 1 && (
+                                        <div className="p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/50 text-xs text-amber-800 dark:text-amber-300 flex items-center gap-2">
+                                            <AlertCircle className="w-4 h-4 shrink-0" />
+                                            <span>
+                                                {remaining === 0
+                                                    ? 'Pacote encerrado! Hora de renovar.'
+                                                    : 'Última aula do pacote! Avise para renovar.'}
+                                            </span>
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                                    {remaining > 0 && (
+                                        <button
+                                            type="button"
+                                            disabled={busyId === s.id}
+                                            onClick={() => handleRegisterClass(s)}
+                                            className="btn btn-primary btn-sm flex-1"
+                                        >
+                                            <CheckCircle2 className="w-4 h-4" />
+                                            Dar Baixa (-1 aula)
+                                        </button>
+                                    )}
+
+                                    {todayAttId && (
+                                        <button
+                                            type="button"
+                                            disabled={busyId === s.id}
+                                            onClick={() => handleUndoTodayClass(s, todayAttId)}
+                                            className="btn btn-secondary btn-sm"
+                                            title="Desfazer aula marcada hoje"
+                                        >
+                                            <Undo2 className="w-3.5 h-3.5" />
+                                            Desfazer
+                                        </button>
+                                    )}
+
+                                    <button
+                                        type="button"
+                                        onClick={() => onSellPackage(s)}
+                                        className={`btn btn-success btn-sm ${remaining === 0 ? 'flex-1' : ''}`}
+                                    >
+                                        <PlusCircle className="w-3.5 h-3.5" />
+                                        {remaining === 0 ? 'Vender Pacote' : '+ Pacote'}
+                                    </button>
+
+                                    <WhatsAppButton
+                                        phone={s.phone}
+                                        size="icon"
+                                        message={`Olá ${s.name.split(' ')[0]}! Aqui é da *${gymName}* 🥊\nVocê está com *${remaining} aula(s)* restante(s) no seu pacote Personal.${
+                                            remaining <= 1 ? ' Quando quiser renovar o próximo pacote, é só me chamar!' : ''
+                                        }`}
+                                    />
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
             )}
         </div>
     );

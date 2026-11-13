@@ -1,275 +1,233 @@
-import { useState } from 'react';
-import { useLiveQuery } from 'dexie-react-hooks';
-import { Check, Trash2, Users, List, Calendar, TrendingUp } from 'lucide-react';
+import { useMemo, useState } from 'react';
 import {
-    LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
-} from 'recharts';
+    Search,
+    CheckCircle2,
+    Undo2,
+    CalendarCheck,
+    AlertTriangle,
+} from 'lucide-react';
+import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip } from 'recharts';
 import { useAttendance, useStudents } from '../../hooks/useGymStore';
-import { Attendance } from '../../types';
-import { db } from '../../services/db';
-import { getTodayDateString, isOverdue, getDaysUntilDue } from '../../utils/dateUtils';
+import { Student } from '../../types';
+import {
+    formatLocalDateString,
+    getStudentPaymentStatus,
+    getTodayDateString,
+} from '../../utils/dateUtils';
+import { recordAttendance, softDeleteAttendance } from '../../services/dataAccess';
+import { useToast } from '../../contexts/ToastContext';
+import { EmptyState } from '../UI';
 
 export function AttendanceManager() {
     const students = useStudents();
-    const allAttendance = useAttendance();
-    const plans = useLiveQuery(() => db.plans.toArray()) || [];
-    const activeStudents = students.filter(s => s.status === 'ativo');
+    const attendance = useAttendance();
+    const { showToast } = useToast();
+
     const [selectedDate, setSelectedDate] = useState(getTodayDateString());
-    const [searchTerm, setSearchTerm] = useState('');
-    const [activeTab, setActiveTab] = useState<'checkin' | 'records'>('checkin');
+    const [search, setSearch] = useState('');
+    const [filter, setFilter] = useState<'all' | 'present' | 'absent'>('all');
+    const [busyStudentId, setBusyStudentId] = useState<string | null>(null);
 
-    // Filter Logic
-    const selectedDateAttendance = allAttendance.filter(a => a.date === selectedDate);
+    const activeStudents = useMemo(
+        () =>
+            students
+                .filter((s) => s.status === 'ativo')
+                .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR')),
+        [students]
+    );
 
-    // Chart Data
-    const getWeeklyAttendance = () => {
-        const days = [];
+    const dateAttendanceMap = useMemo(() => {
+        const map = new Map<string, string>();
+        attendance
+            .filter((a) => a.date === selectedDate)
+            .forEach((a) => map.set(a.studentId, a.id));
+        return map;
+    }, [attendance, selectedDate]);
+
+    const filteredStudents = useMemo(() => {
+        const term = search.trim().toLowerCase();
+        return activeStudents.filter((s) => {
+            const isPresent = dateAttendanceMap.has(s.id);
+            if (filter === 'present' && !isPresent) return false;
+            if (filter === 'absent' && isPresent) return false;
+            if (term && !s.name.toLowerCase().includes(term)) return false;
+            return true;
+        });
+    }, [activeStudents, dateAttendanceMap, filter, search]);
+
+    // Gráfico dos últimos 7 dias sem erro de UTC
+    const weeklyChart = useMemo(() => {
+        const days: { day: string; Presenças: number }[] = [];
+        const weekdayNames = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+        const now = new Date();
+
         for (let i = 6; i >= 0; i--) {
-            const d = new Date();
-            d.setDate(d.getDate() - i);
-            const dateStr = d.toISOString().split('T')[0];
-            const dayName = d.toLocaleDateString('pt-BR', { weekday: 'short' });
-            const count = allAttendance.filter(a => a.date === dateStr).length;
-            days.push({ day: dayName, presenças: count });
+            const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
+            const dateStr = formatLocalDateString(d);
+            const count = attendance.filter((a) => a.date === dateStr).length;
+            days.push({
+                day: `${weekdayNames[d.getDay()]} (${String(d.getDate()).padStart(2, '0')})`,
+                Presenças: count,
+            });
         }
         return days;
-    };
+    }, [attendance]);
 
-    const handleCheckIn = async (studentId: string) => {
-        const student = students.find(s => s.id === studentId);
-        if (!student) return;
-
-        // "Normal" check-in logic only
-        const existing = selectedDateAttendance.find(a => a.studentId === studentId && a.attendanceType !== 'personal');
-        if (existing) return;
-
-        const newAttendance: Attendance = {
-            id: Date.now().toString(),
-            studentId,
-            studentName: student.name,
-            date: selectedDate,
-            createdAt: new Date().toISOString(),
-            attendanceType: 'normal' // Always normal here
-        };
-
+    const handleToggleCheckIn = async (student: Student) => {
+        setBusyStudentId(student.id);
         try {
-            await db.attendance.add(newAttendance);
-        } catch (error) {
-            console.error(error);
-            alert('Erro ao registrar presença');
-        }
-    };
-
-    const handleDelete = async (att: Attendance) => {
-        if (confirm('Remover presença?')) {
-            try {
-                await db.transaction('rw', db.attendance, db.students, async () => {
-                    await db.attendance.delete(att.id);
-
-                    // If we delete a 'personal' attendance from here (view only), restore balance
-                    if (att.attendanceType === 'personal') {
-                        const student = await db.students.get(att.studentId);
-                        if (student) {
-                            const current = student.personalClassesRemaining || 0;
-                            await db.students.update(att.studentId, {
-                                personalClassesRemaining: current + 1
-                            });
-                        }
-                    }
-                });
-            } catch (error) {
-                console.error(error);
-                alert('Erro ao remover presença');
+            const existingAttId = dateAttendanceMap.get(student.id);
+            if (existingAttId) {
+                await softDeleteAttendance(existingAttId);
+                showToast('info', `Presença de ${student.name} removida.`);
+            } else {
+                await recordAttendance(student, selectedDate, 'normal');
+                showToast('success', `Presença confirmada para ${student.name}!`);
             }
+        } catch {
+            showToast('error', 'Erro ao atualizar presença.');
+        } finally {
+            setBusyStudentId(null);
         }
     };
 
-    const selectedDateDisplay = new Date(selectedDate + 'T12:00:00');
+    const presentCount = dateAttendanceMap.size;
 
     return (
-        <div className="space-y-6 animate-fade-in">
-            {/* Header / Date Selector */}
-            <div className="flex justify-between items-center flex-wrap gap-4">
+        <div className="space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div>
-                    <h2 className="text-xl font-bold" style={{ marginBottom: '0.25rem' }}>
-                        📋 Controle de Presenças
-                    </h2>
-                    <p className="text-sm text-gray-500">
-                        {selectedDateDisplay.toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
+                    <h1 className="font-display text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white tracking-tight">
+                        Lista de Presença
+                    </h1>
+                    <p className="text-sm text-slate-500 dark:text-slate-400">
+                        {presentCount} presente(s) em{' '}
+                        {selectedDate.split('-').reverse().join('/')}
                     </p>
                 </div>
-                <div className="flex items-center gap-3">
-                    <div style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '0.75rem',
-                        background: 'white',
-                        padding: '0.625rem 1rem',
-                        borderRadius: '12px',
-                        boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
-                        border: '1px solid var(--gray-100)'
-                    }}>
-                        <Calendar size={18} style={{ color: 'var(--primary)' }} />
-                        <input
-                            type="date"
-                            value={selectedDate}
-                            onChange={(e) => setSelectedDate(e.target.value)}
-                            style={{
-                                border: 'none',
-                                background: 'transparent',
-                                fontWeight: 600,
-                                color: 'var(--gray-700)',
-                                cursor: 'pointer'
-                            }}
-                        />
-                    </div>
-                    <button
-                        onClick={() => setSelectedDate(new Date().toISOString().split('T')[0])}
-                        className="btn btn-primary btn-sm"
-                        style={{ borderRadius: '10px' }}
-                    >
-                        Hoje
-                    </button>
+
+                <input
+                    type="date"
+                    value={selectedDate}
+                    onChange={(e) => setSelectedDate(e.target.value)}
+                    className="input sm:w-48 font-semibold"
+                />
+            </div>
+
+            {/* Frequência dos últimos 7 dias */}
+            <div className="card p-5 space-y-3">
+                <div className="text-sm font-bold text-slate-800 dark:text-slate-100">
+                    Movimento dos Últimos 7 Dias
+                </div>
+                <div className="h-44 w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={weeklyChart}>
+                            <XAxis dataKey="day" tick={{ fontSize: 11 }} />
+                            <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
+                            <Tooltip />
+                            <Bar dataKey="Presenças" fill="#e11d48" radius={[6, 6, 0, 0]} />
+                        </BarChart>
+                    </ResponsiveContainer>
                 </div>
             </div>
 
-            {/* Weekly Chart */}
-            <div className="chart-container" style={{ borderRadius: '20px' }}>
-                <h3 className="chart-title mb-4" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <TrendingUp size={18} style={{ color: 'var(--primary)' }} />
-                    Frequência Semanal
-                </h3>
-                <ResponsiveContainer width="100%" height={200}>
-                    <LineChart data={getWeeklyAttendance()}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                        <XAxis dataKey="day" tick={{ fontSize: 12 }} />
-                        <YAxis tick={{ fontSize: 12 }} />
-                        <Tooltip
-                            contentStyle={{
-                                borderRadius: '12px',
-                                border: 'none',
-                                boxShadow: '0 4px 20px rgba(0,0,0,0.15)'
-                            }}
-                        />
-                        <Line
-                            type="monotone"
-                            dataKey="presenças"
-                            stroke="#1e40af"
-                            strokeWidth={3}
-                            dot={{ fill: '#1e40af', strokeWidth: 2, r: 5 }}
-                            activeDot={{ r: 8, fill: '#3b82f6' }}
-                        />
-                    </LineChart>
-                </ResponsiveContainer>
+            {/* Busca e Filtros */}
+            <div className="card p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="relative flex-1">
+                    <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                    <input
+                        type="text"
+                        placeholder="Buscar aluno para dar presença..."
+                        value={search}
+                        onChange={(e) => setSearch(e.target.value)}
+                        className="input pl-10"
+                    />
+                </div>
+
+                <div className="flex gap-1.5">
+                    {[
+                        { id: 'all', label: `Todos (${activeStudents.length})` },
+                        { id: 'present', label: `Presentes (${presentCount})` },
+                        { id: 'absent', label: 'Sem presença' },
+                    ].map((tab) => (
+                        <button
+                            key={tab.id}
+                            type="button"
+                            onClick={() => setFilter(tab.id as typeof filter)}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-bold border ${
+                                filter === tab.id
+                                    ? 'bg-slate-900 text-white border-slate-900 dark:bg-white dark:text-slate-900'
+                                    : 'bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700'
+                            }`}
+                        >
+                            {tab.label}
+                        </button>
+                    ))}
+                </div>
             </div>
 
-            {/* Premium Tabs */}
-            <div className="attendance-tabs">
-                <button
-                    onClick={() => setActiveTab('checkin')}
-                    className={`attendance-tab ${activeTab === 'checkin' ? 'active' : ''}`}
-                >
-                    <Users size={18} />
-                    <span>Marcar Presença</span>
-                    <span className="attendance-tab-badge">{activeStudents.length}</span>
-                </button>
-                <button
-                    onClick={() => setActiveTab('records')}
-                    className={`attendance-tab ${activeTab === 'records' ? 'active' : ''}`}
-                >
-                    <List size={18} />
-                    <span>Registros do Dia</span>
-                    <span className="attendance-tab-badge">{selectedDateAttendance.length}</span>
-                </button>
-            </div>
-
-            {/* Tab Content */}
-            {activeTab === 'checkin' && (
-                <div>
-                    <div className="mb-4">
-                        <input
-                            className="form-input"
-                            placeholder="🔍 Buscar aluno..."
-                            value={searchTerm}
-                            onChange={e => setSearchTerm(e.target.value)}
-                            style={{ borderRadius: '12px', padding: '0.875rem 1rem' }}
-                        />
-                    </div>
-
-                    <div className="attendance-grid">
-                        {activeStudents
-                            .filter(s => s.name.toLowerCase().includes(searchTerm.toLowerCase()))
-                            .map(student => {
-                                const hasAttendance = selectedDateAttendance.some(a => a.studentId === student.id && a.attendanceType !== 'personal');
-                                const plan = plans.find(p => p.id === student.plan);
-                                const isLate = isOverdue(student.nextDue);
-
-                                return (
-                                    <div
-                                        key={student.id}
-                                        onClick={() => !hasAttendance && handleCheckIn(student.id)}
-                                        className={`attendance-card ${hasAttendance ? 'present' : ''} ${isLate && !hasAttendance ? 'border-l-4 border-l-red-500' : ''}`}
-                                    >
-                                        <div className="attendance-card-header">
-                                            <span className="student-name text-sm md:text-base">{student.name}</span>
-                                            {hasAttendance && <Check size={22} style={{ color: 'var(--success)' }} />}
-                                        </div>
-                                        <div className="attendance-card-info">
-                                            <div className="flex flex-col gap-1">
-                                                <span className="text-xs" style={{ color: 'var(--gray-500)' }}>{plan?.name}</span>
-                                                {isLate && (
-                                                    <span className="text-xs font-semibold text-red-600 bg-red-50 px-1.5 py-0.5 rounded border border-red-200 inline-block w-fit">
-                                                        ⚠️ Mensalidade Vencida ({Math.abs(getDaysUntilDue(student.nextDue))}d)
-                                                    </span>
-                                                )}
-                                            </div>
-                                            <span className="time">{hasAttendance ? '✓ Presente' : 'Clique para marcar'}</span>
-                                        </div>
+            {/* Lista de Check-in */}
+            {filteredStudents.length === 0 ? (
+                <EmptyState
+                    icon={<CalendarCheck className="w-6 h-6" />}
+                    title="Nenhum aluno encontrado"
+                    description="Verifique os filtros acima para localizar os alunos ativos."
+                />
+            ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                    {filteredStudents.map((s) => {
+                        const isPresent = dateAttendanceMap.has(s.id);
+                        const isLate = getStudentPaymentStatus(s).status === 'overdue';
+                        return (
+                            <div
+                                key={s.id}
+                                className={`card p-4 flex items-center justify-between gap-3 transition-all ${
+                                    isPresent
+                                        ? 'border-emerald-300 bg-emerald-50/40 dark:bg-emerald-950/20 dark:border-emerald-800'
+                                        : ''
+                                }`}
+                            >
+                                <div className="min-w-0">
+                                    <div className="font-bold text-sm text-slate-900 dark:text-white truncate">
+                                        {s.name}
                                     </div>
-                                );
-                            })}
-                    </div>
-                </div>
-            )}
+                                    <div className="flex items-center gap-1.5 mt-0.5">
+                                        {isLate ? (
+                                            <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-600 dark:text-amber-400">
+                                                <AlertTriangle className="w-3 h-3" />
+                                                Mensalidade atrasada
+                                            </span>
+                                        ) : (
+                                            <span className="text-[11px] text-slate-500">
+                                                {s.graduation || 'Aluno'}
+                                            </span>
+                                        )}
+                                    </div>
+                                </div>
 
-            {activeTab === 'records' && (
-                <div className="records-card">
-                    <div className="records-card-header">
-                        <h3>
-                            <List size={18} />
-                            Presenças Registradas ({selectedDateAttendance.length})
-                        </h3>
-                    </div>
-                    <div className="records-list">
-                        {selectedDateAttendance.length === 0 ? (
-                            <div className="records-empty">
-                                <div className="records-empty-icon">📭</div>
-                                <p>Nenhuma presença registrada nesta data.</p>
+                                <button
+                                    type="button"
+                                    disabled={busyStudentId === s.id}
+                                    onClick={() => handleToggleCheckIn(s)}
+                                    className={`btn btn-sm shrink-0 ${
+                                        isPresent ? 'btn-secondary' : 'btn-success'
+                                    }`}
+                                >
+                                    {isPresent ? (
+                                        <>
+                                            <Undo2 className="w-3.5 h-3.5" />
+                                            Presente
+                                        </>
+                                    ) : (
+                                        <>
+                                            <CheckCircle2 className="w-3.5 h-3.5" />
+                                            Marcar
+                                        </>
+                                    )}
+                                </button>
                             </div>
-                        ) : (
-                            selectedDateAttendance.map(att => {
-                                return (
-                                    <div key={att.id} className="record-item">
-                                        <div className="record-info">
-                                            <span className="record-name">{att.studentName}</span>
-                                            {att.attendanceType === 'personal' ? (
-                                                <span className="badge badge-blue ml-2 text-xs">Personal</span>
-                                            ) : (
-                                                <span className="badge badge-success ml-2 text-xs">Normal</span>
-                                            )}
-                                        </div>
-                                        <button
-                                            onClick={() => handleDelete(att)}
-                                            className="record-delete"
-                                            title="Remover presença"
-                                        >
-                                            <Trash2 size={18} />
-                                        </button>
-                                    </div>
-                                );
-                            })
-                        )}
-                    </div>
+                        );
+                    })}
                 </div>
             )}
         </div>

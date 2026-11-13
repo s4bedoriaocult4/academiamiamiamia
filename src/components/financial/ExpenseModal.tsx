@@ -1,7 +1,9 @@
-import { useState, useEffect } from 'react';
-import { X } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { X, Check } from 'lucide-react';
 import { Expense, EXPENSE_CATEGORIES } from '../../types';
-import { db } from '../../services/db';
+import { getTodayDateString } from '../../utils/dateUtils';
+import { saveExpense } from '../../services/dataAccess';
+import { useToast } from '../../contexts/ToastContext';
 
 interface ExpenseModalProps {
     isOpen: boolean;
@@ -10,137 +12,151 @@ interface ExpenseModalProps {
 }
 
 export function ExpenseModal({ isOpen, onClose, expenseToEdit }: ExpenseModalProps) {
-    const [formData, setFormData] = useState<Partial<Expense>>({
-        description: '', amount: 0, category: 'Outros', date: new Date().toISOString().split('T')[0], recurring: false
-    });
+    const { showToast } = useToast();
+    const [description, setDescription] = useState('');
+    const [category, setCategory] = useState<Expense['category']>('Outros');
+    const [amount, setAmount] = useState('');
+    const [date, setDate] = useState(getTodayDateString());
+    const [recurring, setRecurring] = useState(false);
+    const [isSaving, setIsSaving] = useState(false);
 
     useEffect(() => {
+        if (!isOpen) return;
         if (expenseToEdit) {
-            setFormData(expenseToEdit);
+            setDescription(expenseToEdit.description);
+            setCategory(expenseToEdit.category);
+            setAmount(String(expenseToEdit.amount));
+            setDate(expenseToEdit.date);
+            setRecurring(Boolean(expenseToEdit.recurring));
         } else {
-            setFormData({
-                description: '', amount: 0, category: 'Outros', date: new Date().toISOString().split('T')[0], recurring: false
-            });
+            setDescription('');
+            setCategory('Aluguel');
+            setAmount('');
+            setDate(getTodayDateString());
+            setRecurring(false);
         }
-    }, [expenseToEdit, isOpen]);
+    }, [isOpen, expenseToEdit]);
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
-
-        if (!formData.description || !formData.amount) {
-            alert('Preencha descrição e valor');
+        const num = parseFloat(amount.replace(',', '.'));
+        if (!description.trim() || !Number.isFinite(num) || num <= 0) {
+            showToast('warning', 'Preencha descrição e valor válido.');
             return;
         }
 
+        setIsSaving(true);
         try {
-            if (expenseToEdit) {
-                await db.expenses.update(expenseToEdit.id, formData);
-            } else {
-                const newExpense: Expense = {
-                    id: Date.now().toString(),
-                    description: formData.description!,
-                    amount: Number(formData.amount),
-                    category: formData.category as any,
-                    date: formData.date!,
-                    recurring: formData.recurring || false,
-                    createdAt: new Date().toISOString()
-                };
-                await db.expenses.add(newExpense);
-            }
+            await saveExpense({
+                id: expenseToEdit?.id,
+                description: description.trim(),
+                category,
+                amount: num,
+                date,
+                recurring,
+            });
+            showToast('success', expenseToEdit ? 'Despesa atualizada!' : 'Despesa registrada!');
             onClose();
-        } catch (error) {
-            console.error(error);
-            alert('Erro ao salvar despesa');
-        }
-    };
-
-    // Verificar se há dados não salvos
-    const hasUnsavedChanges = (): boolean => {
-        if (expenseToEdit) return false; // Edição simplificada
-        return !!(formData.description || (formData.amount && formData.amount > 0));
-    };
-
-    const handleClose = () => {
-        if (hasUnsavedChanges()) {
-            if (confirm('Você tem dados não salvos. Deseja realmente sair?')) {
-                onClose();
-            }
-        } else {
-            onClose();
+        } catch {
+            showToast('error', 'Erro ao salvar despesa.');
+        } finally {
+            setIsSaving(false);
         }
     };
 
     if (!isOpen) return null;
 
     return (
-        <div className="modal-overlay" onClick={handleClose}>
-            <div className="modal" onClick={e => e.stopPropagation()}>
+        <div className="modal-overlay" onClick={onClose}>
+            <div className="modal-box max-w-md" onClick={(e) => e.stopPropagation()}>
                 <div className="modal-header">
-                    <h3>{expenseToEdit ? '💸 Editar Despesa' : '💸 Nova Despesa'}</h3>
-                    <button onClick={handleClose} className="action-btn"><X size={20} /></button>
+                    <h2 className="font-display text-lg font-bold text-slate-900 dark:text-white">
+                        {expenseToEdit ? 'Editar Despesa' : 'Nova Despesa'}
+                    </h2>
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        className="p-2 rounded-xl text-slate-400 hover:text-slate-700"
+                    >
+                        <X className="w-5 h-5" />
+                    </button>
                 </div>
-                <form onSubmit={handleSubmit} className="modal-body">
-                    <div className="form-group">
-                        <label className="form-label">Descrição *</label>
-                        <input
-                            required
-                            className="form-input"
-                            value={formData.description}
-                            onChange={e => setFormData({ ...formData, description: e.target.value })}
-                        />
-                    </div>
 
-                    <div className="grid grid-cols-2 gap-4" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                        <div className="form-group">
-                            <label className="form-label">Valor (R$) *</label>
+                <form onSubmit={handleSubmit}>
+                    <div className="modal-body">
+                        <div>
+                            <label className="label">Descrição *</label>
                             <input
-                                type="number"
-                                step="0.01"
+                                type="text"
                                 required
-                                className="form-input"
-                                value={formData.amount}
-                                onChange={e => setFormData({ ...formData, amount: Number(e.target.value) })}
+                                autoFocus
+                                placeholder="Ex: Aluguel do salão, Conta de luz..."
+                                value={description}
+                                onChange={(e) => setDescription(e.target.value)}
+                                className="input"
                             />
                         </div>
-                        <div className="form-group">
-                            <label className="form-label">Categoria</label>
-                            <select
-                                className="form-select"
-                                value={formData.category}
-                                onChange={e => setFormData({ ...formData, category: e.target.value as any })}
-                            >
-                                {EXPENSE_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-                            </select>
+
+                        <div className="grid grid-cols-2 gap-3">
+                            <div>
+                                <label className="label">Categoria</label>
+                                <select
+                                    value={category}
+                                    onChange={(e) => setCategory(e.target.value as Expense['category'])}
+                                    className="input"
+                                >
+                                    {EXPENSE_CATEGORIES.map((c) => (
+                                        <option key={c} value={c}>
+                                            {c}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+                            <div>
+                                <label className="label">Valor (R$) *</label>
+                                <input
+                                    type="number"
+                                    step="0.01"
+                                    min="0"
+                                    required
+                                    placeholder="0,00"
+                                    value={amount}
+                                    onChange={(e) => setAmount(e.target.value)}
+                                    onWheel={(e) => e.currentTarget.blur()}
+                                    className="input font-bold"
+                                />
+                            </div>
                         </div>
-                    </div>
 
-                    <div className="form-group">
-                        <label className="form-label">Data</label>
-                        <input
-                            type="date"
-                            required
-                            className="form-input"
-                            value={formData.date}
-                            onChange={e => setFormData({ ...formData, date: e.target.value })}
-                        />
-                    </div>
+                        <div>
+                            <label className="label">Data</label>
+                            <input
+                                type="date"
+                                required
+                                value={date}
+                                onChange={(e) => setDate(e.target.value)}
+                                className="input"
+                            />
+                        </div>
 
-                    <div className="form-group flex items-center gap-2">
-                        <input
-                            type="checkbox"
-                            id="recurring"
-                            checked={formData.recurring}
-                            onChange={e => setFormData({ ...formData, recurring: e.target.checked })}
-                            className="w-4 h-4"
-                        />
-                        <label htmlFor="recurring" className="text-sm cursor-pointer select-none">
-                            Esta despesa é recorrente (fixa todo mês)
+                        <label className="flex items-center gap-2.5 text-sm text-slate-700 dark:text-slate-300 cursor-pointer pt-1">
+                            <input
+                                type="checkbox"
+                                checked={recurring}
+                                onChange={(e) => setRecurring(e.target.checked)}
+                                className="w-4 h-4 rounded text-rose-600 focus:ring-rose-500"
+                            />
+                            <span>Despesa fixa mensal (recorrente)</span>
                         </label>
                     </div>
 
-                    <div className="form-group pt-4">
-                        <button type="submit" className="btn btn-primary w-full" style={{ width: '100%' }}>
-                            Salvar Despesa
+                    <div className="modal-footer">
+                        <button type="button" onClick={onClose} className="btn btn-secondary">
+                            Cancelar
+                        </button>
+                        <button type="submit" disabled={isSaving} className="btn btn-primary">
+                            <Check className="w-4 h-4" />
+                            {isSaving ? 'Salvando...' : 'Salvar Despesa'}
                         </button>
                     </div>
                 </form>
